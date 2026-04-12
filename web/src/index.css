@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-bg: #0a0a0b;
+  --color-bg-secondary: #131316;
+  --color-card: #1a1a1f;
+  --color-card-hover: #222228;
+  --color-border: #2a2a32;
+  --color-text: #fafafa;
+  --color-text-secondary: #8a8a98;
+  --color-text-muted: #5a5a68;
+  --color-accent: #6366f1;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-opportunity: #f97316;
+  --color-opportunity-muted: rgba(249, 115, 22, 0.25);
+}
+
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("https://fonts.gstatic.com/s/dmsans/v15/rP2Yp2ywxg089UriI5-g4vlH9VoD8Cmcqbu0-K4.woff2")
+    format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("https://fonts.gstatic.com/s/jetbrainsmono/v20/tDbV2o-flEEny0FZhsfKuM63CtJDu66.woff2")
+    format("woff2");
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+.font-mono-nums {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.leaflet-container {
+  background: var(--color-bg-secondary);
+  border-radius: 8px;
+}

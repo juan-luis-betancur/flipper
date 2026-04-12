@@ -1,0 +1,32 @@
+# Entornos y secretos
+.env
+.env.*
+!.env.example
+
+# Python
+backend/__pycache__/
+backend/**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Node / Vite
+web/node_modules/
+web/dist/
+
+# IDE y OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Fixtures: solo se versiona el .txt de __NEXT_DATA__; no el HTML completo ni _files del navegador
+backend/tests/fixtures/finca_raiz/id_193618833_files/
+backend/tests/fixtures/finca_raiz/id_193618833.html
