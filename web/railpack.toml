@@ -1,2 +1,2 @@
 [build]
-cmd = "npm ci && npm run build"
+cmd = "npm cache clean --force && npm ci && npm run build"
