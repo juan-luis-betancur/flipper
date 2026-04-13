@@ -11,6 +11,7 @@ from ..filters import property_matches_alert
 from ..supabase_client import get_supabase
 from ..telegram_bot import format_property_message, format_scan_summary_html, send_message
 from .finca_raiz import build_list_url, scrape_source
+from .mercado_libre import scrape_mercado_libre
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ def _merge_row(user_id: str, partial: dict) -> dict:
     base = {
         "user_id": user_id,
         "external_id": partial["external_id"],
-        "platform": "finca_raiz",
+        "platform": partial.get("platform") or "finca_raiz",
         "url": partial["url"],
         "title": partial.get("title"),
         "price": partial.get("price"),
@@ -79,25 +80,48 @@ def run_pipeline(user_id: str, run_id: str) -> None:
         total_sent = 0
         total_seen = 0
         remaining = settings.scrape_max_properties
-        new_external_ids: list[str] = []
+        new_refs: list[tuple[str, str]] = []
 
         with httpx.Client(headers=headers, follow_redirects=True) as client:
             for src in sources:
                 if remaining <= 0:
                     break
-                list_url = build_list_url(src.get("neighborhoods") or [], src.get("publication_filter") or "today")
-                lines.append(f"Fuente «{src.get('name')}»: {list_url}")
-                upd(etapa=f"Scrapeando listado ({src.get('name')})…")
-                rows = scrape_source(client, list_url, max_props=remaining, delay=settings.scrape_delay_seconds)
+                platform = (src.get("platform") or "finca_raiz").strip()
+                if platform == "mercado_libre":
+                    list_url = (src.get("list_url") or "").strip()
+                    if not list_url:
+                        lines.append(f"Fuente «{src.get('name')}»: mercado_libre sin list_url; omitida.")
+                        continue
+                    lines.append(f"Fuente «{src.get('name')}» (ML): {list_url}")
+                    upd(etapa=f"Scrapeando listado ({src.get('name')})…")
+                    rows = scrape_mercado_libre(
+                        list_url,
+                        max_props=remaining,
+                        delay=settings.scrape_delay_seconds,
+                    )
+                else:
+                    list_url = build_list_url(
+                        src.get("neighborhoods") or [],
+                        src.get("publication_filter") or "today",
+                    )
+                    lines.append(f"Fuente «{src.get('name')}»: {list_url}")
+                    upd(etapa=f"Scrapeando listado ({src.get('name')})…")
+                    rows = scrape_source(
+                        client,
+                        list_url,
+                        max_props=remaining,
+                        delay=settings.scrape_delay_seconds,
+                    )
                 total_seen += len(rows)
                 upd(etapa="Extrayendo detalles / guardando…")
                 for row in rows:
                     ext = row["external_id"]
+                    plat = row.get("platform") or platform
                     ex = (
                         sb.table("properties")
                         .select("id")
                         .eq("user_id", user_id)
-                        .eq("platform", "finca_raiz")
+                        .eq("platform", plat)
                         .eq("external_id", ext)
                         .limit(1)
                         .execute()
@@ -110,7 +134,7 @@ def run_pipeline(user_id: str, run_id: str) -> None:
                     ).execute()
                     if is_new:
                         total_new += 1
-                        new_external_ids.append(ext)
+                        new_refs.append((plat, ext))
                 remaining = max(0, remaining - len(rows))
                 sb.table("scraping_sources").update(
                     {
@@ -139,15 +163,15 @@ def run_pipeline(user_id: str, run_id: str) -> None:
             and tg
             and tg.get("bot_token")
             and tg.get("chat_id")
-            and new_external_ids
+            and new_refs
         ):
             matches: list[dict] = []
-            for ext in new_external_ids:
+            for plat, ext in new_refs:
                 pr = (
                     sb.table("properties")
                     .select("*")
                     .eq("user_id", user_id)
-                    .eq("platform", "finca_raiz")
+                    .eq("platform", plat)
                     .eq("external_id", ext)
                     .limit(1)
                     .execute()
@@ -175,7 +199,7 @@ def run_pipeline(user_id: str, run_id: str) -> None:
                         total_sent += 1
                     except Exception as e:
                         lines.append(f"Telegram error: {e}")
-        elif not new_external_ids:
+        elif not new_refs:
             lines.append("Sin propiedades nuevas; no se envía Telegram.")
         else:
             lines.append("Telegram o filtros no configurados para envío.")

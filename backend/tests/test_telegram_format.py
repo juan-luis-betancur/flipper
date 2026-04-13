@@ -7,6 +7,7 @@ from app.telegram_bot import (
     format_scan_summary_html,
     is_guardar_command,
     parse_reply_external_id,
+    parse_reply_listing_ref,
 )
 
 
@@ -24,6 +25,7 @@ class TestFormatScanSummary(unittest.TestCase):
 class TestFormatPropertyMessage(unittest.TestCase):
     def test_link_href_and_id_for_guardar(self) -> None:
         row = {
+            "platform": "finca_raiz",
             "external_id": "193618833",
             "title": "Apartamento en Venta",
             "url": "https://www.fincaraiz.com.co/x/193618833",
@@ -42,6 +44,7 @@ class TestFormatPropertyMessage(unittest.TestCase):
     def test_parse_reply_still_works(self) -> None:
         body = format_property_message(
             {
+                "platform": "finca_raiz",
                 "external_id": "99",
                 "title": "T",
                 "url": "https://example.com",
@@ -53,6 +56,8 @@ class TestFormatPropertyMessage(unittest.TestCase):
         )
         ext = parse_reply_external_id(body.replace("<code>", "").replace("</code>", ""))
         self.assertEqual(ext, "99")
+        ref = parse_reply_listing_ref(body.replace("<code>", "").replace("</code>", ""))
+        self.assertEqual(ref, ("finca_raiz", "99"))
 
 
 class TestIsGuardarCommand(unittest.TestCase):
@@ -74,6 +79,7 @@ class TestIsGuardarCommand(unittest.TestCase):
     def test_parse_reply_with_code_tags(self) -> None:
         body = format_property_message(
             {
+                "platform": "finca_raiz",
                 "external_id": "77",
                 "title": "T",
                 "url": "https://example.com",
@@ -85,6 +91,21 @@ class TestIsGuardarCommand(unittest.TestCase):
         )
         ext = parse_reply_external_id(body)
         self.assertEqual(ext, "77")
+
+    def test_mercado_libre_id_line_and_parse(self) -> None:
+        row = {
+            "platform": "mercado_libre",
+            "external_id": "123456",
+            "title": "Apto ML",
+            "url": "https://apartamento.mercadolibre.com.co/MCO-123456-x-_JM",
+            "price": 200_000_000,
+            "area": None,
+            "precio_por_m2": None,
+        }
+        body = format_property_message(row, index=1)
+        self.assertIn("ID: mercado_libre:123456", body)
+        ref = parse_reply_listing_ref(body)
+        self.assertEqual(ref, ("mercado_libre", "123456"))
 
 
 if __name__ == "__main__":

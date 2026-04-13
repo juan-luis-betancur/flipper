@@ -6,7 +6,7 @@ export type PublicationFilter =
   | 'last_30_days'
   | 'last_40_days'
   | 'none'
-export type ListingPlatform = 'finca_raiz'
+export type ListingPlatform = 'finca_raiz' | 'mercado_libre'
 export type ScraperRunStatus = 'pending' | 'running' | 'success' | 'failed'
 export type SavedVia = 'web' | 'telegram'
 
@@ -15,6 +15,8 @@ export interface ScrapingSource {
   user_id: string
   name: string
   platform: ListingPlatform
+  /** URL de listado web ML; solo ``mercado_libre``. */
+  list_url: string | null
   neighborhoods: string[]
   publication_filter: PublicationFilter
   is_active: boolean

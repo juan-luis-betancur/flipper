@@ -113,14 +113,32 @@ def format_property_message(row: dict[str, Any], *, index: int | None = None) ->
     if url:
         lines.append(f'🔗 <a href="{escape(url, quote=True)}">Ver publicación</a>')
     lines.append("")
-    lines.append(f"<code>ID: finca_raiz:{escape(str(ext))}</code>")
+    plat = str(row.get("platform") or "finca_raiz").strip() or "finca_raiz"
+    lines.append(f"<code>ID: {escape(plat)}:{escape(str(ext))}</code>")
     lines.append("")
     lines.append("Responde <b>GUARDAR</b> a este mensaje para guardarla en Flipper.")
     return "\n".join(lines)
 
 
-def parse_reply_external_id(reply_text: str) -> str | None:
+_LISTING_REF_RE = re.compile(r"ID:\s*([a-z_]+)\s*:\s*([^\s<]+)", re.I)
+_ALLOWED_PLATFORMS = frozenset({"finca_raiz", "mercado_libre"})
+
+
+def parse_reply_listing_ref(reply_text: str) -> tuple[str, str] | None:
+    """Devuelve (platform, external_id) si el mensaje citado incluye la línea ID: plataforma:ext."""
     if not reply_text:
         return None
-    m = re.search(r"ID:\s*finca_raiz:([^\s<]+)", reply_text, re.I)
-    return m.group(1) if m else None
+    m = _LISTING_REF_RE.search(reply_text)
+    if not m:
+        return None
+    plat = m.group(1).strip().lower()
+    ext = m.group(2).strip()
+    if plat not in _ALLOWED_PLATFORMS or not ext:
+        return None
+    return (plat, ext)
+
+
+def parse_reply_external_id(reply_text: str) -> str | None:
+    """Solo el external_id (compatibilidad con mensajes que ya incluyen plataforma en la misma línea)."""
+    ref = parse_reply_listing_ref(reply_text)
+    return ref[1] if ref else None

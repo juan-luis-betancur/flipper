@@ -14,7 +14,7 @@ from .telegram_bot import (
     TELEGRAM_HINT_PROPERTY_NOT_FOUND,
     TELEGRAM_HINT_REPLY_TO_LISTING,
     is_guardar_command,
-    parse_reply_external_id,
+    parse_reply_listing_ref,
     send_message,
 )
 
@@ -122,7 +122,7 @@ async def telegram_webhook(secret: str, request: Request):
         return {"ok": True}
 
     cid = str(chat_id).strip() if chat_id is not None else None
-    ext = parse_reply_external_id(reply_text)
+    ref = parse_reply_listing_ref(reply_text)
 
     def notify_chat(html: str) -> None:
         if not cid:
@@ -148,13 +148,14 @@ async def telegram_webhook(secret: str, request: Request):
         log.info("telegram guardar: ignorado (sin chat_id)")
         return {"ok": True}
 
-    if not ext:
+    if not ref:
         log.info(
             "telegram guardar: sin ID en mensaje citado (cita el aviso del apto) chat_id=%s",
             cid,
         )
         notify_chat(TELEGRAM_HINT_REPLY_TO_LISTING)
         return {"ok": True}
+    plat, ext = ref
 
     sb = get_supabase()
     tg = (
@@ -175,7 +176,7 @@ async def telegram_webhook(secret: str, request: Request):
         sb.table("properties")
         .select("id")
         .eq("user_id", uid)
-        .eq("platform", "finca_raiz")
+        .eq("platform", plat)
         .eq("external_id", ext)
         .limit(1)
         .execute()
@@ -183,8 +184,9 @@ async def telegram_webhook(secret: str, request: Request):
     pr = (prop.data or [None])[0]
     if not pr:
         log.info(
-            "telegram guardar: propiedad no encontrada user_id=%s external_id=%s",
+            "telegram guardar: propiedad no encontrada user_id=%s platform=%s external_id=%s",
             uid,
+            plat,
             ext,
         )
         notify_chat(TELEGRAM_HINT_PROPERTY_NOT_FOUND)
@@ -201,8 +203,9 @@ async def telegram_webhook(secret: str, request: Request):
         ).execute()
     except Exception:
         log.exception(
-            "telegram guardar: upsert saved_properties falló user_id=%s external_id=%s",
+            "telegram guardar: upsert saved_properties falló user_id=%s platform=%s external_id=%s",
             uid,
+            plat,
             ext,
         )
         if bt:
@@ -219,5 +222,5 @@ async def telegram_webhook(secret: str, request: Request):
         except Exception as e:
             log.warning("telegram guardar: confirmación falló: %s", e)
 
-    log.info("telegram guardar: ok user_id=%s external_id=%s", uid, ext)
+    log.info("telegram guardar: ok user_id=%s platform=%s external_id=%s", uid, plat, ext)
     return {"ok": True}

@@ -3,12 +3,17 @@ import { toast } from 'sonner'
 import { requireSupabase } from '../lib/supabase'
 import { buildFincaRaizListadoUrl } from '../lib/fincaRaizUrl'
 import { PRESET_NEIGHBORHOODS } from '../constants/neighborhoods'
-import type { AlertFilter, PublicationFilter, ScrapingSource, TelegramSettings } from '../types/db'
+import type { AlertFilter, ListingPlatform, PublicationFilter, ScrapingSource, TelegramSettings } from '../types/db'
 import { ScrapeFab } from '../components/ScrapeFab'
 import { CurrencyTextInput } from '../components/CurrencyTextInput'
 import { AreaM2TextInput } from '../components/AreaM2TextInput'
 import { apiFetch } from '../lib/api'
 import { apiErrorMessage } from '../lib/apiErrors'
+
+const PLATFORM_OPTIONS: { value: ListingPlatform; label: string }[] = [
+  { value: 'finca_raiz', label: 'Finca Raíz' },
+  { value: 'mercado_libre', label: 'Mercado Libre (listado web)' },
+]
 
 const PUBLICATION_OPTIONS: { value: PublicationFilter; label: string }[] = [
   { value: 'today', label: 'Hoy' },
@@ -23,6 +28,8 @@ const PUBLICATION_OPTIONS: { value: PublicationFilter; label: string }[] = [
 function emptySourceForm() {
   return {
     name: '',
+    platform: 'finca_raiz' as ListingPlatform,
+    list_url: '',
     neighborhoods: [] as string[],
     customBarrio: '',
     publication_filter: 'today' as PublicationFilter,
@@ -80,10 +87,13 @@ export function ConfigPage() {
     load()
   }, [load])
 
-  const previewUrl = useMemo(
-    () => buildFincaRaizListadoUrl(form.neighborhoods, form.publication_filter),
-    [form.neighborhoods, form.publication_filter],
-  )
+  const previewUrl = useMemo(() => {
+    if (form.platform === 'mercado_libre') {
+      const u = form.list_url.trim()
+      return u || 'https://listado.mercadolibre.com.co/… (pega la URL del listado)'
+    }
+    return buildFincaRaizListadoUrl(form.neighborhoods, form.publication_filter)
+  }, [form.platform, form.list_url, form.neighborhoods, form.publication_filter])
 
   const globalError = useMemo(() => sources.find((s) => s.last_run_error)?.last_run_error, [sources])
 
@@ -93,12 +103,21 @@ export function ConfigPage() {
       toast.error('Nombre requerido')
       return
     }
+    if (form.platform === 'mercado_libre') {
+      const u = form.list_url.trim()
+      if (!u.startsWith('https://listado.mercadolibre.com.co')) {
+        toast.error('La URL debe ser de listado.mercadolibre.com.co (https)')
+        return
+      }
+    }
     const row = {
       user_id: userId,
       name: form.name.trim(),
-      platform: 'finca_raiz' as const,
-      neighborhoods: form.neighborhoods,
-      publication_filter: form.publication_filter,
+      platform: form.platform,
+      list_url: form.platform === 'mercado_libre' ? form.list_url.trim() : null,
+      neighborhoods: form.platform === 'mercado_libre' ? [] : form.neighborhoods,
+      publication_filter:
+        form.platform === 'mercado_libre' ? ('none' as PublicationFilter) : form.publication_filter,
       is_active: true,
     }
     if (editingId) {
@@ -126,6 +145,8 @@ export function ConfigPage() {
     setEditingId(s.id)
     setForm({
       name: s.name,
+      platform: s.platform,
+      list_url: s.list_url ?? '',
       neighborhoods: [...(s.neighborhoods ?? [])],
       customBarrio: '',
       publication_filter: s.publication_filter,
@@ -271,16 +292,23 @@ export function ConfigPage() {
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <h3 className="font-medium text-text">{s.name}</h3>
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {(s.neighborhoods ?? []).map((b) => (
-                          <span
-                            key={b}
-                            className="rounded-full border border-border bg-bg-secondary px-2 py-0.5 text-xs text-text-secondary"
-                          >
-                            {b}
-                          </span>
-                        ))}
-                      </div>
+                      <p className="mt-1 text-xs text-text-secondary">
+                        {PLATFORM_OPTIONS.find((o) => o.value === s.platform)?.label ?? s.platform}
+                      </p>
+                      {s.platform === 'mercado_libre' && s.list_url ? (
+                        <p className="mt-2 break-all font-mono text-[11px] text-text-muted">{s.list_url}</p>
+                      ) : (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {(s.neighborhoods ?? []).map((b) => (
+                            <span
+                              key={b}
+                              className="rounded-full border border-border bg-bg-secondary px-2 py-0.5 text-xs text-text-secondary"
+                            >
+                              {b}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <p className="mt-2 text-xs text-text-muted">
                         Publicación:{' '}
                         {PUBLICATION_OPTIONS.find((o) => o.value === s.publication_filter)?.label}
@@ -415,72 +443,105 @@ export function ConfigPage() {
               </label>
               <label className="block text-sm text-text-secondary">
                 Plataforma
-                <select disabled className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-text-muted">
-                  <option>Finca Raíz</option>
-                </select>
-              </label>
-              <div>
-                <p className="text-sm text-text-secondary">Barrios</p>
-                <div className="mt-2 flex max-h-32 flex-wrap gap-1 overflow-y-auto">
-                  {PRESET_NEIGHBORHOODS.map((b) => {
-                    const on = form.neighborhoods.includes(b)
-                    return (
-                      <button
-                        key={b}
-                        type="button"
-                        onClick={() =>
-                          setForm((f) => ({
-                            ...f,
-                            neighborhoods: on
-                              ? f.neighborhoods.filter((x) => x !== b)
-                              : [...f.neighborhoods, b],
-                          }))
-                        }
-                        className={`rounded-full border px-2 py-0.5 text-xs ${
-                          on ? 'border-accent bg-accent/20 text-accent' : 'border-border text-text-secondary'
-                        }`}
-                      >
-                        {b}
-                      </button>
-                    )
-                  })}
-                </div>
-                <div className="mt-2 flex gap-2">
-                  <input
-                    placeholder="Barrio personalizado"
-                    value={form.customBarrio}
-                    onChange={(e) => setForm((f) => ({ ...f, customBarrio: e.target.value }))}
-                    className="flex-1 rounded-md border border-border bg-bg-secondary px-2 py-1 text-sm text-text"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const v = form.customBarrio.trim()
-                      if (!v || form.neighborhoods.includes(v)) return
-                      setForm((f) => ({ ...f, neighborhoods: [...f.neighborhoods, v], customBarrio: '' }))
-                    }}
-                    className="rounded-md border border-border px-2 text-sm text-text-secondary"
-                  >
-                    Añadir
-                  </button>
-                </div>
-              </div>
-              <label className="block text-sm text-text-secondary">
-                Filtro de publicación
                 <select
-                  value={form.publication_filter}
+                  value={form.platform}
                   onChange={(e) =>
-                    setForm((f) => ({ ...f, publication_filter: e.target.value as PublicationFilter }))
+                    setForm((f) => ({
+                      ...f,
+                      platform: e.target.value as ListingPlatform,
+                    }))
                   }
+                  disabled={!!editingId}
                   className="mt-1 w-full rounded-md border border-border bg-bg-secondary px-3 py-2 text-text"
                 >
-                  {PUBLICATION_OPTIONS.map((o) => (
+                  {PLATFORM_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
                       {o.label}
                     </option>
                   ))}
                 </select>
+                {editingId && (
+                  <p className="mt-1 text-xs text-text-muted">La plataforma no se puede cambiar al editar.</p>
+                )}
               </label>
+              {form.platform === 'mercado_libre' ? (
+                <label className="block text-sm text-text-secondary">
+                  URL del listado (listado.mercadolibre.com.co)
+                  <textarea
+                    required
+                    rows={3}
+                    value={form.list_url}
+                    onChange={(e) => setForm((f) => ({ ...f, list_url: e.target.value }))}
+                    placeholder="https://listado.mercadolibre.com.co/inmuebles/..."
+                    className="mt-1 w-full rounded-md border border-border bg-bg-secondary px-3 py-2 font-mono text-xs text-text"
+                  />
+                </label>
+              ) : (
+                <>
+                  <div>
+                    <p className="text-sm text-text-secondary">Barrios</p>
+                    <div className="mt-2 flex max-h-32 flex-wrap gap-1 overflow-y-auto">
+                      {PRESET_NEIGHBORHOODS.map((b) => {
+                        const on = form.neighborhoods.includes(b)
+                        return (
+                          <button
+                            key={b}
+                            type="button"
+                            onClick={() =>
+                              setForm((f) => ({
+                                ...f,
+                                neighborhoods: on
+                                  ? f.neighborhoods.filter((x) => x !== b)
+                                  : [...f.neighborhoods, b],
+                              }))
+                            }
+                            className={`rounded-full border px-2 py-0.5 text-xs ${
+                              on ? 'border-accent bg-accent/20 text-accent' : 'border-border text-text-secondary'
+                            }`}
+                          >
+                            {b}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <input
+                        placeholder="Barrio personalizado"
+                        value={form.customBarrio}
+                        onChange={(e) => setForm((f) => ({ ...f, customBarrio: e.target.value }))}
+                        className="flex-1 rounded-md border border-border bg-bg-secondary px-2 py-1 text-sm text-text"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const v = form.customBarrio.trim()
+                          if (!v || form.neighborhoods.includes(v)) return
+                          setForm((f) => ({ ...f, neighborhoods: [...f.neighborhoods, v], customBarrio: '' }))
+                        }}
+                        className="rounded-md border border-border px-2 text-sm text-text-secondary"
+                      >
+                        Añadir
+                      </button>
+                    </div>
+                  </div>
+                  <label className="block text-sm text-text-secondary">
+                    Filtro de publicación
+                    <select
+                      value={form.publication_filter}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, publication_filter: e.target.value as PublicationFilter }))
+                      }
+                      className="mt-1 w-full rounded-md border border-border bg-bg-secondary px-3 py-2 text-text"
+                    >
+                      {PUBLICATION_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              )}
               <div>
                 <p className="text-sm text-text-secondary">Vista previa URL</p>
                 <pre className="mt-1 overflow-x-auto rounded-md border border-border bg-bg p-2 text-[10px] text-text-muted">

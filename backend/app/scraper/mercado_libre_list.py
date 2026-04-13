@@ -1,0 +1,146 @@
+"""Listado web Mercado Libre Colombia: extracción de ítems y paginación _Desde_*_NoIndex_True.
+
+Smoke / producción (p. ej. Railway):
+- El PoW suele funcionar desde IP residencial; algunas IPs de datacenter reciben 403 o HTML de reto
+  sin resolver. Si el pipeline falla en listado, prueba ``ML_COOKIE`` (header ``Cookie`` copiado del
+  navegador tras abrir el mismo listado; caduca).
+- Ejecutar un smoke manual: ``cd backend && python experiments/ml_list_probe.py --url "<list_url>"``.
+"""
+from __future__ import annotations
+
+import re
+from typing import Any
+
+import httpx
+from bs4 import BeautifulSoup
+
+from .mercado_libre_challenge import ML_BROWSER_HEADERS, fetch_html_after_challenge
+
+# Tamaño de página típico en JSON de paginación ML (49 -> 97 = +48).
+_ML_PAGE_STEP = 48
+_ML_FIRST_OFFSET = 49
+
+_MCO_ITEM_RE = re.compile(
+    r"https://[a-z0-9.-]+\.mercadolibre\.com\.co/(?:MCO|MLC)-(\d+)-",
+    re.I,
+)
+_MCO_URL_IN_HTML_RE = re.compile(
+    r"https://[a-z0-9.-]+\.mercadolibre\.com\.co/MCO-\d+-[^\s\"'<>]+",
+    re.I,
+)
+_DESDE_SUFFIX_RE = re.compile(r"/_Desde_\d+(?:_NoIndex_True)?/?$", re.I)
+
+
+def strip_listing_pagination(url: str) -> str:
+    u = url.rstrip("/")
+    while True:
+        nu = _DESDE_SUFFIX_RE.sub("", u)
+        if nu == u:
+            break
+        u = nu
+    return u.rstrip("/")
+
+
+def listing_url_for_page(base_list_url: str, page_index: int) -> str:
+    """
+    page_index 0 = primera página (URL base sin _Desde_).
+    Siguientes: /_Desde_49_NoIndex_True, /_Desde_97_NoIndex_True, ...
+    """
+    base = strip_listing_pagination(base_list_url)
+    if page_index <= 0:
+        return base
+    offset = _ML_FIRST_OFFSET + (page_index - 1) * _ML_PAGE_STEP
+    return f"{base}/_Desde_{offset}_NoIndex_True"
+
+
+def extract_listing_items(html: str, limit: int | None = None) -> list[dict[str, str]]:
+    """id MCO numérico, url canónica de publicación, título si hay en <a>."""
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+
+    def add_url(href: str, title: str) -> None:
+        href = href.strip().split("#")[0]
+        m = _MCO_ITEM_RE.match(href)
+        if not m:
+            return
+        item_id = m.group(1)
+        if item_id in seen:
+            return
+        seen.add(item_id)
+        t = (title or "").strip().replace("\n", " ")[:200]
+        out.append({"id": item_id, "url": href, "title": t or "(sin título)"})
+
+    soup = BeautifulSoup(html, "html.parser")
+    for a in soup.find_all("a", href=True):
+        add_url(str(a["href"]), (a.get_text() or ""))
+        if limit is not None and len(out) >= limit:
+            return out
+
+    for href in dict.fromkeys(_MCO_URL_IN_HTML_RE.findall(html)):
+        add_url(href, "")
+        if limit is not None and len(out) >= limit:
+            break
+
+    return out
+
+
+def gather_listing_item_urls(
+    client: httpx.Client,
+    base_list_url: str,
+    max_items: int,
+    *,
+    max_pages: int = 30,
+) -> list[dict[str, str]]:
+    """
+    Recorre páginas de listado hasta max_items o hasta una página sin ítems nuevos.
+    """
+    seen: set[str] = set()
+    ordered: list[dict[str, str]] = []
+
+    for page in range(max_pages):
+        if len(ordered) >= max_items:
+            break
+        url = listing_url_for_page(base_list_url, page)
+        html = fetch_html_after_challenge(client, url)
+        if len(html) < 10_000 and "verifyChallenge" in html:
+            break
+        batch = extract_listing_items(html, limit=None)
+        added = False
+        for it in batch:
+            if it["id"] in seen:
+                continue
+            seen.add(it["id"])
+            ordered.append(it)
+            added = True
+            if len(ordered) >= max_items:
+                break
+        if not batch or not added:
+            break
+
+    return ordered[:max_items]
+
+
+def ml_client_with_optional_cookie(ml_cookie: str | None) -> httpx.Client:
+    from ..config import get_settings
+
+    headers = dict(ML_BROWSER_HEADERS)
+    ua = get_settings().user_agent.strip()
+    if ua:
+        headers["User-Agent"] = ua
+    c = httpx.Client(headers=headers, follow_redirects=True, timeout=60.0)
+    if ml_cookie and ml_cookie.strip():
+        c.headers["Cookie"] = ml_cookie.strip()
+    return c
+
+
+def fetch_listing_html(client: httpx.Client, list_url: str) -> str:
+    """Una sola página: PoW o ML_COOKIE ya aplicada en client."""
+    return fetch_html_after_challenge(client, list_url)
+
+
+def scrape_ml_list_urls(list_url: str, max_items: int, ml_cookie: str | None = None) -> list[dict[str, Any]]:
+    """
+    Devuelve lista de dicts con id, url, title para consumo del scraper de detalle.
+    """
+    with ml_client_with_optional_cookie(ml_cookie) as client:
+        return gather_listing_item_urls(client, list_url, max_items)
