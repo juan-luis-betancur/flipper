@@ -188,11 +188,14 @@ export function ConfigPage() {
   async function saveTelegram(e: React.FormEvent) {
     e.preventDefault()
     if (!userId) return
+    const rawChat = telegram?.chat_id
+    const chatTrimmed =
+      typeof rawChat === 'string' ? rawChat.trim() || null : rawChat ?? null
     const payload = {
       user_id: userId,
-      chat_id: telegram?.chat_id ?? null,
+      chat_id: chatTrimmed,
       bot_token: telegram?.bot_token ?? null,
-      is_active: !!(telegram?.chat_id && telegram?.bot_token),
+      is_active: !!(chatTrimmed && telegram?.bot_token),
     }
     const { error } = await supabase.from('telegram_settings').upsert(payload)
     if (error) toast.error(error.message)

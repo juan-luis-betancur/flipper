@@ -5,6 +5,7 @@ import unittest
 from app.telegram_bot import (
     format_property_message,
     format_scan_summary_html,
+    is_guardar_command,
     parse_reply_external_id,
 )
 
@@ -52,6 +53,38 @@ class TestFormatPropertyMessage(unittest.TestCase):
         )
         ext = parse_reply_external_id(body.replace("<code>", "").replace("</code>", ""))
         self.assertEqual(ext, "99")
+
+
+class TestIsGuardarCommand(unittest.TestCase):
+    def test_plain_and_case(self) -> None:
+        self.assertTrue(is_guardar_command("guardar"))
+        self.assertTrue(is_guardar_command("GUARDAR"))
+        self.assertTrue(is_guardar_command("  Guardar  "))
+
+    def test_punctuation(self) -> None:
+        self.assertTrue(is_guardar_command("guardar!"))
+        self.assertTrue(is_guardar_command("…guardar…"))
+        self.assertTrue(is_guardar_command("guardar."))
+
+    def test_rejects_extra_words(self) -> None:
+        self.assertFalse(is_guardar_command("quiero guardar"))
+        self.assertFalse(is_guardar_command("guardar esto"))
+        self.assertFalse(is_guardar_command(""))
+
+    def test_parse_reply_with_code_tags(self) -> None:
+        body = format_property_message(
+            {
+                "external_id": "77",
+                "title": "T",
+                "url": "https://example.com",
+                "price": 1,
+                "area": 1,
+                "precio_por_m2": 1,
+            },
+            index=2,
+        )
+        ext = parse_reply_external_id(body)
+        self.assertEqual(ext, "77")
 
 
 if __name__ == "__main__":

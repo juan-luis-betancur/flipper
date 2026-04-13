@@ -8,6 +8,27 @@ import httpx
 
 TG_API = "https://api.telegram.org"
 
+# Comando "guardar" con signos/espacios alrededor (evita fallar en "guardar!" o "… guardar …").
+_GUARDAR_CMD_RE = re.compile(r"^[\s\"'()¡¿….,;:!?\-]*guardar[\s\"'()¡¿….,;:!?\-]*$", re.I)
+
+TELEGRAM_HINT_REPLY_TO_LISTING = (
+    "Para guardar: responde con la palabra <b>guardar</b> "
+    "<u>citando el mensaje del apartamento</u> (usa «Responder» en ese mensaje)."
+)
+
+TELEGRAM_HINT_PROPERTY_NOT_FOUND = (
+    "No encontré esa propiedad en tu cuenta Flipper. "
+    "Asegúrate de citar el aviso que envió este bot."
+)
+
+
+def is_guardar_command(text: str) -> bool:
+    """True si el mensaje es solo la orden guardar (tolerante a puntuación/espacios)."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    return bool(_GUARDAR_CMD_RE.fullmatch(t))
+
 
 def send_message(
     bot_token: str,
@@ -99,5 +120,7 @@ def format_property_message(row: dict[str, Any], *, index: int | None = None) ->
 
 
 def parse_reply_external_id(reply_text: str) -> str | None:
+    if not reply_text:
+        return None
     m = re.search(r"ID:\s*finca_raiz:([^\s<]+)", reply_text, re.I)
     return m.group(1) if m else None

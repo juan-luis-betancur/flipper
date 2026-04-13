@@ -10,7 +10,13 @@ from .auth_jwt import bearer_dep
 from .config import get_settings
 from .scraper.pipeline import run_pipeline
 from .supabase_client import get_supabase
-from .telegram_bot import parse_reply_external_id, send_message
+from .telegram_bot import (
+    TELEGRAM_HINT_PROPERTY_NOT_FOUND,
+    TELEGRAM_HINT_REPLY_TO_LISTING,
+    is_guardar_command,
+    parse_reply_external_id,
+    send_message,
+)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -88,7 +94,7 @@ def telegram_test(user_id: str = Depends(bearer_dep)):
     row = (tg.data or [None])[0]
     if not row or not row.get("bot_token") or not row.get("chat_id"):
         raise HTTPException(status_code=400, detail="Configura bot_token y chat_id")
-    send_message(row["bot_token"], str(row["chat_id"]), "👋 Flipper conectado correctamente")
+    send_message(row["bot_token"], str(row["chat_id"]).strip(), "👋 Flipper conectado correctamente")
     return {"ok": True}
 
 
@@ -98,32 +104,73 @@ async def telegram_webhook(secret: str, request: Request):
     if secret != s.telegram_webhook_secret:
         raise HTTPException(status_code=404, detail="Not found")
     body = await request.json()
+    if body.get("callback_query"):
+        return {"ok": True}
+
     msg = body.get("message") or body.get("edited_message") or {}
-    text = (msg.get("text") or "").strip().lower()
+    if not msg:
+        log.debug("telegram webhook: sin message (keys=%s)", list(body.keys())[:15])
+        return {"ok": True}
+
+    text_raw = (msg.get("text") or "").strip()
     chat = msg.get("chat") or {}
     chat_id = chat.get("id")
     reply = msg.get("reply_to_message") or {}
-    reply_text = reply.get("text") or reply.get("caption") or ""
+    reply_text = (reply.get("text") or reply.get("caption") or "").strip()
 
-    if text not in ("guardar", "guardar."):
+    if not is_guardar_command(text_raw):
         return {"ok": True}
 
+    cid = str(chat_id).strip() if chat_id is not None else None
     ext = parse_reply_external_id(reply_text)
-    if not ext or chat_id is None:
+
+    def notify_chat(html: str) -> None:
+        if not cid:
+            return
+        sb0 = get_supabase()
+        t0 = (
+            sb0.table("telegram_settings")
+            .select("bot_token")
+            .eq("chat_id", cid)
+            .limit(1)
+            .execute()
+        )
+        r0 = (t0.data or [None])[0]
+        tok = (r0 or {}).get("bot_token")
+        if not tok:
+            return
+        try:
+            send_message(tok, cid, html)
+        except Exception as e:
+            log.warning("telegram webhook: envío al usuario falló: %s", e)
+
+    if cid is None:
+        log.info("telegram guardar: ignorado (sin chat_id)")
+        return {"ok": True}
+
+    if not ext:
+        log.info(
+            "telegram guardar: sin ID en mensaje citado (cita el aviso del apto) chat_id=%s",
+            cid,
+        )
+        notify_chat(TELEGRAM_HINT_REPLY_TO_LISTING)
         return {"ok": True}
 
     sb = get_supabase()
     tg = (
         sb.table("telegram_settings")
-        .select("user_id")
-        .eq("chat_id", str(chat_id))
+        .select("user_id, bot_token")
+        .eq("chat_id", cid)
         .limit(1)
         .execute()
     )
     row = (tg.data or [None])[0]
     if not row:
+        log.warning("telegram guardar: chat_id no enlazado a usuario chat_id=%s", cid)
         return {"ok": True}
+
     uid = row["user_id"]
+    bt = row.get("bot_token")
     prop = (
         sb.table("properties")
         .select("id")
@@ -135,26 +182,42 @@ async def telegram_webhook(secret: str, request: Request):
     )
     pr = (prop.data or [None])[0]
     if not pr:
+        log.info(
+            "telegram guardar: propiedad no encontrada user_id=%s external_id=%s",
+            uid,
+            ext,
+        )
+        notify_chat(TELEGRAM_HINT_PROPERTY_NOT_FOUND)
         return {"ok": True}
-    sb.table("saved_properties").upsert(
-        {
-            "user_id": uid,
-            "property_id": pr["id"],
-            "guardada_via": "telegram",
-        },
-        on_conflict="user_id,property_id",
-    ).execute()
 
-    bot_token_row = sb.table("telegram_settings").select("bot_token").eq("user_id", uid).limit(1).execute()
-    bt = (bot_token_row.data or [None])[0]
-    if bt and bt.get("bot_token"):
+    try:
+        sb.table("saved_properties").upsert(
+            {
+                "user_id": uid,
+                "property_id": pr["id"],
+                "guardada_via": "telegram",
+            },
+            on_conflict="user_id,property_id",
+        ).execute()
+    except Exception:
+        log.exception(
+            "telegram guardar: upsert saved_properties falló user_id=%s external_id=%s",
+            uid,
+            ext,
+        )
+        if bt:
+            notify_chat("No se pudo guardar. Intenta de nuevo o revisa Flipper.")
+        return {"ok": True}
+
+    if bt:
         try:
             send_message(
-                bt["bot_token"],
-                str(chat_id),
+                bt,
+                cid,
                 "✅ Guardada. Puedes verla en Flipper en la sección Propiedades Guardadas.",
             )
         except Exception as e:
-            log.warning("reply telegram failed: %s", e)
+            log.warning("telegram guardar: confirmación falló: %s", e)
 
+    log.info("telegram guardar: ok user_id=%s external_id=%s", uid, ext)
     return {"ok": True}
