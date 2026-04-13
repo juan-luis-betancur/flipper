@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from typing import Any
@@ -17,6 +18,20 @@ from .location_snapshot import patch_ubicacion_from_description_extract, patch_u
 from .medellin_neighborhoods import whitelist_barrios
 
 PREFIX = "https://www.fincaraiz.com.co/venta/apartamentos/antioquia"
+
+# Tope de páginas de listado para evitar bucles ante HTML inesperado.
+_MAX_LISTING_PAGES = 100
+
+# "Mostrando 1 - 21 de 225 resultados" (números pueden llevar . como miles)
+_RESULT_SUMMARY_RE = re.compile(
+    r"mostrando\s+(\d[\d.]*)\s*-\s*(\d[\d.]*)\s+de\s+(\d[\d.]*)\s+resultados",
+    re.I,
+)
+
+_PAGINA_SUFFIX_RE = re.compile(r"/pagina\d+/?$", re.I)
+
+# Última página en enlaces del listado: …/venta/apartamentos/…/pagina42
+_PAGINA_IN_LISTING_HREF_RE = re.compile(r"/pagina(\d+)(?:/|$|[?#])", re.I)
 
 PUBLICATION_PATH = {
     "today": "publicado-hoy",
@@ -110,6 +125,119 @@ def extract_listing_urls(html: str) -> list[str]:
                 seen.add(full)
                 found.append(full)
     return found
+
+
+def _strip_listing_pagination(url: str) -> str:
+    u = url.rstrip("/")
+    return _PAGINA_SUFFIX_RE.sub("", u)
+
+
+def _listing_url_for_page(base: str, page: int) -> str:
+    b = base.rstrip("/")
+    if page <= 1:
+        return b
+    return f"{b}/pagina{page}"
+
+
+def _parse_int_co(s: str) -> int:
+    """Enteros como en el sitio (p. ej. miles con punto: 1.225)."""
+    return int(re.sub(r"[^\d]", "", s))
+
+
+def _max_page_from_listing_pagination(html: str) -> int | None:
+    """
+    Máximo N en hrefs del listado (…/venta/apartamentos/…/paginaN).
+    Equivale al último botón numérico antes de «siguiente»; sirve cuando el resumen dice «más de 400».
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    best = 0
+    for a in soup.find_all("a", href=True):
+        href = str(a["href"]).strip()
+        if not href or href.startswith("#"):
+            continue
+        full = urljoin("https://www.fincaraiz.com.co", href).split("#")[0]
+        if "fincaraiz.com.co" not in full.lower():
+            continue
+        if "/venta/apartamentos" not in full.lower():
+            continue
+        m = _PAGINA_IN_LISTING_HREF_RE.search(full)
+        if not m:
+            continue
+        try:
+            n = int(m.group(1))
+        except ValueError:
+            continue
+        if n > best:
+            best = n
+    if best < 1:
+        return None
+    return min(_MAX_LISTING_PAGES, best)
+
+
+def _pages_from_result_summary(html: str) -> int | None:
+    m = _RESULT_SUMMARY_RE.search(html)
+    if not m:
+        return None
+    start = _parse_int_co(m.group(1))
+    end = _parse_int_co(m.group(2))
+    total = _parse_int_co(m.group(3))
+    if end < start or total < 1:
+        return None
+    per_page = end - start + 1
+    if per_page < 1:
+        return None
+    pages = max(1, math.ceil(total / per_page))
+    return min(_MAX_LISTING_PAGES, pages)
+
+
+def parsed_total_listing_pages(html: str) -> int | None:
+    """
+    Páginas de listado: primero enlaces /paginaN del listado (robusto con «más de 400»),
+    si no hay, resumen «Mostrando … de Z resultados». None si no aplica.
+    """
+    from_href = _max_page_from_listing_pagination(html)
+    if from_href is not None:
+        return from_href
+    return _pages_from_result_summary(html)
+
+
+def _gather_listing_urls_across_pages(
+    client: httpx.Client,
+    base: str,
+    max_props: int,
+    first_page_html: str,
+    known_pages: int | None,
+) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    def add_from_html(html: str) -> None:
+        for u in extract_listing_urls(html):
+            if u not in seen:
+                seen.add(u)
+                ordered.append(u)
+
+    add_from_html(first_page_html)
+    if len(ordered) >= max_props:
+        return ordered[:max_props]
+
+    if known_pages is not None:
+        for p in range(2, known_pages + 1):
+            if len(ordered) >= max_props:
+                break
+            html = fetch_url(client, _listing_url_for_page(base, p))
+            add_from_html(html)
+        return ordered[:max_props]
+
+    p = 2
+    while p <= _MAX_LISTING_PAGES and len(ordered) < max_props:
+        html = fetch_url(client, _listing_url_for_page(base, p))
+        prev_len = len(ordered)
+        add_from_html(html)
+        if len(ordered) == prev_len:
+            break
+        p += 1
+    return ordered[:max_props]
 
 
 def _walk(obj: Any) -> list[dict[str, Any]]:
@@ -253,8 +381,10 @@ def scrape_source(
     max_props: int,
     delay: float,
 ) -> list[dict[str, Any]]:
-    html = fetch_url(client, list_url)
-    urls = extract_listing_urls(html)[:max_props]
+    base = _strip_listing_pagination(list_url)
+    first_html = fetch_url(client, _listing_url_for_page(base, 1))
+    known_pages = parsed_total_listing_pages(first_html)
+    urls = _gather_listing_urls_across_pages(client, base, max_props, first_html, known_pages)
     results: list[dict[str, Any]] = []
     for u in urls:
         time.sleep(delay)
