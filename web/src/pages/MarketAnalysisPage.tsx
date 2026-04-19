@@ -342,22 +342,22 @@ export function MarketAnalysisPage() {
           <div className="h-[320px]">
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
-                <CartesianGrid stroke="#2a2a32" strokeDasharray="3 3" />
+                <CartesianGrid stroke="#e7e5de" strokeDasharray="3 3" />
                 <XAxis
                   type="number"
                   dataKey="x"
                   name={NUMERIC_AXIS_LABELS[scatterX]}
                   unit={axisUnitSuffix(scatterX)}
-                  stroke="#5a5a68"
-                  tick={{ fill: '#8a8a98', fontSize: 11 }}
+                  stroke="#98a0b3"
+                  tick={{ fill: '#52607a', fontSize: 11 }}
                 />
                 <YAxis
                   type="number"
                   dataKey="y"
                   name={NUMERIC_AXIS_LABELS[scatterY]}
                   unit={axisUnitSuffix(scatterY)}
-                  stroke="#5a5a68"
-                  tick={{ fill: '#8a8a98', fontSize: 11 }}
+                  stroke="#98a0b3"
+                  tick={{ fill: '#52607a', fontSize: 11 }}
                 />
                 <Tooltip
                   cursor={{ strokeDasharray: '3 3' }}
@@ -459,17 +459,17 @@ export function MarketAnalysisPage() {
           {barRows.length ? (
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={barRows} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-                <CartesianGrid stroke="#2a2a32" strokeDasharray="3 3" />
+                <CartesianGrid stroke="#e7e5de" strokeDasharray="3 3" />
                 <XAxis
                   dataKey="name"
-                  stroke="#5a5a68"
-                  tick={{ fill: '#8a8a98', fontSize: 10 }}
+                  stroke="#98a0b3"
+                  tick={{ fill: '#52607a', fontSize: 10 }}
                   interval={0}
                   angle={barRows.length > 6 ? -22 : 0}
                   textAnchor={barRows.length > 6 ? 'end' : 'middle'}
                   height={barRows.length > 6 ? 72 : 36}
                 />
-                <YAxis stroke="#5a5a68" tick={{ fill: '#8a8a98', fontSize: 11 }} />
+                <YAxis stroke="#98a0b3" tick={{ fill: '#52607a', fontSize: 11 }} />
                 <Tooltip
                   content={({ active, payload }) => {
                     if (!active || !payload?.[0]) return null
@@ -477,7 +477,7 @@ export function MarketAnalysisPage() {
                     return (
                       <div
                         className="rounded border border-border px-3 py-2 text-xs text-text shadow-lg"
-                        style={{ background: '#1a1a1f', borderColor: '#2a2a32' }}
+                        style={{ background: '#ffffff', borderColor: '#e7e5de' }}
                       >
                         <div className="font-medium">{row.name}</div>
                         <div>{formatNumericForChart(barMetric, row.v)}</div>

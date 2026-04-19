@@ -21,7 +21,7 @@ function colorForM2(
   min: number,
   max: number,
 ): string {
-  if (v == null || max <= min) return '#5a5a68'
+  if (v == null || max <= min) return '#98a0b3'
   const t = (v - min) / (max - min)
   const g = Math.round(34 + (1 - t) * 80)
   const r = Math.round(40 + t * 200)
