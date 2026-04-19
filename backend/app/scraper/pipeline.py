@@ -81,68 +81,84 @@ def run_pipeline(user_id: str, run_id: str) -> None:
         total_seen = 0
         remaining = settings.scrape_max_properties
         new_refs: list[tuple[str, str]] = []
+        source_failures = 0
 
         with httpx.Client(headers=headers, follow_redirects=True) as client:
             for src in sources:
                 if remaining <= 0:
                     break
                 platform = (src.get("platform") or "finca_raiz").strip()
-                if platform == "mercado_libre":
-                    list_url = (src.get("list_url") or "").strip()
-                    if not list_url:
-                        lines.append(f"Fuente «{src.get('name')}»: mercado_libre sin list_url; omitida.")
-                        continue
-                    lines.append(f"Fuente «{src.get('name')}» (ML): {list_url}")
-                    upd(etapa=f"Scrapeando listado ({src.get('name')})…")
-                    rows = scrape_mercado_libre(
-                        list_url,
-                        max_props=remaining,
-                        delay=settings.scrape_delay_seconds,
+                try:
+                    if platform == "mercado_libre":
+                        list_url = (src.get("list_url") or "").strip()
+                        if not list_url:
+                            lines.append(f"Fuente «{src.get('name')}»: mercado_libre sin list_url; omitida.")
+                            continue
+                        lines.append(f"Fuente «{src.get('name')}» (ML): {list_url}")
+                        upd(etapa=f"Scrapeando listado ({src.get('name')})…")
+                        rows = scrape_mercado_libre(
+                            list_url,
+                            max_props=remaining,
+                            delay=settings.scrape_delay_seconds,
+                        )
+                    else:
+                        list_url = build_list_url(
+                            src.get("neighborhoods") or [],
+                            src.get("publication_filter") or "today",
+                        )
+                        lines.append(f"Fuente «{src.get('name')}»: {list_url}")
+                        upd(etapa=f"Scrapeando listado ({src.get('name')})…")
+                        rows = scrape_source(
+                            client,
+                            list_url,
+                            max_props=remaining,
+                            delay=settings.scrape_delay_seconds,
+                        )
+                    total_seen += len(rows)
+                    upd(etapa="Extrayendo detalles / guardando…")
+                    for row in rows:
+                        ext = row["external_id"]
+                        plat = row.get("platform") or platform
+                        ex = (
+                            sb.table("properties")
+                            .select("id")
+                            .eq("user_id", user_id)
+                            .eq("platform", plat)
+                            .eq("external_id", ext)
+                            .limit(1)
+                            .execute()
+                        )
+                        is_new = len(ex.data or []) == 0
+                        payload = _merge_row(user_id, row)
+                        sb.table("properties").upsert(
+                            payload,
+                            on_conflict="platform,external_id,user_id",
+                        ).execute()
+                        if is_new:
+                            total_new += 1
+                            new_refs.append((plat, ext))
+                    remaining = max(0, remaining - len(rows))
+                    sb.table("scraping_sources").update(
+                        {
+                            "last_run_at": datetime.now(timezone.utc).isoformat(),
+                            "last_run_properties_count": len(rows),
+                            "last_run_error": None,
+                        }
+                    ).eq("id", src["id"]).execute()
+                except Exception as src_err:
+                    log.exception("fuente %s (%s) falló", src.get("name"), platform)
+                    err_msg = str(src_err)
+                    source_failures += 1
+                    lines.append(
+                        f"Fuente «{src.get('name')}» ({platform}) falló: {err_msg}"
                     )
-                else:
-                    list_url = build_list_url(
-                        src.get("neighborhoods") or [],
-                        src.get("publication_filter") or "today",
-                    )
-                    lines.append(f"Fuente «{src.get('name')}»: {list_url}")
-                    upd(etapa=f"Scrapeando listado ({src.get('name')})…")
-                    rows = scrape_source(
-                        client,
-                        list_url,
-                        max_props=remaining,
-                        delay=settings.scrape_delay_seconds,
-                    )
-                total_seen += len(rows)
-                upd(etapa="Extrayendo detalles / guardando…")
-                for row in rows:
-                    ext = row["external_id"]
-                    plat = row.get("platform") or platform
-                    ex = (
-                        sb.table("properties")
-                        .select("id")
-                        .eq("user_id", user_id)
-                        .eq("platform", plat)
-                        .eq("external_id", ext)
-                        .limit(1)
-                        .execute()
-                    )
-                    is_new = len(ex.data or []) == 0
-                    payload = _merge_row(user_id, row)
-                    sb.table("properties").upsert(
-                        payload,
-                        on_conflict="platform,external_id,user_id",
-                    ).execute()
-                    if is_new:
-                        total_new += 1
-                        new_refs.append((plat, ext))
-                remaining = max(0, remaining - len(rows))
-                sb.table("scraping_sources").update(
-                    {
-                        "last_run_at": datetime.now(timezone.utc).isoformat(),
-                        "last_run_properties_count": len(rows),
-                        "last_run_error": None,
-                    }
-                ).eq("id", src["id"]).execute()
+                    sb.table("scraping_sources").update(
+                        {
+                            "last_run_at": datetime.now(timezone.utc).isoformat(),
+                            "last_run_error": err_msg,
+                        }
+                    ).eq("id", src["id"]).execute()
+                    continue
 
         filt_res = (
             sb.table("alert_filters")
@@ -204,15 +220,23 @@ def run_pipeline(user_id: str, run_id: str) -> None:
         else:
             lines.append("Telegram o filtros no configurados para envío.")
 
+        all_failed = source_failures > 0 and source_failures == len(sources)
+        partial_fail_msg = (
+            f"{source_failures} de {len(sources)} fuentes fallaron"
+            if source_failures and not all_failed
+            else None
+        )
         upd(
-            estado="success",
+            estado="failed" if all_failed else "success",
             fecha_fin=datetime.now(timezone.utc).isoformat(),
             total_encontradas=total_seen,
             nuevas=total_new,
             enviadas_a_telegram=total_sent,
             log_resumen="\n".join(lines[-40:]),
-            etapa="Listo",
-            mensaje_error=None,
+            etapa="Listo" if not all_failed else "Error",
+            mensaje_error=(
+                "Todas las fuentes fallaron" if all_failed else partial_fail_msg
+            ),
         )
     except Exception as e:
         log.exception("pipeline failed")

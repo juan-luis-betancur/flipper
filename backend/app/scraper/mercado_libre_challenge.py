@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 import urllib.parse
 
 import httpx
@@ -41,18 +42,37 @@ def apply_bmc_cookie(client: httpx.Client, token: str, a: int) -> None:
     client.cookies.set("_bmc", val, domain=".mercadolibre.com.co", path="/")
 
 
-def fetch_html_after_challenge(client: httpx.Client, url: str) -> str:
-    """GET + PoW + segundo GET. Si el HTML ya es listado completo, devuelve al primer intento."""
-    r1 = client.get(url)
-    if len(r1.text) > 50_000 and "ui-search" in r1.text:
-        return r1.text
+def fetch_html_after_challenge(
+    client: httpx.Client,
+    url: str,
+    *,
+    max_attempts: int = 3,
+    retry_delay: float = 2.0,
+) -> str:
+    """GET + PoW + segundo GET. Reintenta el primer GET si ML no setea _bmstate."""
+    bm: str | None = None
+    last_status: int | None = None
+    last_len: int = 0
 
-    bm = get_bmstate_value(client)
+    for attempt in range(1, max_attempts + 1):
+        r1 = client.get(url)
+        last_status = r1.status_code
+        last_len = len(r1.text)
+        if last_len > 50_000 and "ui-search" in r1.text:
+            return r1.text
+        bm = get_bmstate_value(client)
+        if bm:
+            break
+        if attempt < max_attempts:
+            time.sleep(retry_delay * attempt)
+
     if not bm:
         raise RuntimeError(
-            "Mercado Libre: no hay cookie _bmstate. "
-            "Configura ML_COOKIE (header Cookie del navegador) o reintenta."
+            f"Mercado Libre: no hay cookie _bmstate tras {max_attempts} intentos "
+            f"(último status={last_status}, html_len={last_len}). "
+            "Configura ML_COOKIE (header Cookie del navegador) o reintenta más tarde."
         )
+
     raw = urllib.parse.unquote(bm)
     parts = raw.split(";")
     if len(parts) < 2:
