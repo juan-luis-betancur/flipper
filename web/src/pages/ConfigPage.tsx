@@ -95,7 +95,61 @@ export function ConfigPage() {
     return buildFincaRaizListadoUrl(form.neighborhoods, form.publication_filter)
   }, [form.platform, form.list_url, form.neighborhoods, form.publication_filter])
 
-  const globalError = useMemo(() => sources.find((s) => s.last_run_error)?.last_run_error, [sources])
+  const errorSource = useMemo(() => sources.find((s) => s.last_run_error), [sources])
+  const globalError = errorSource?.last_run_error ?? null
+  const scraperErrorKey =
+    errorSource && globalError ? `${errorSource.id}:${globalError}` : null
+  const [hiddenScraperErrorKey, setHiddenScraperErrorKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!scraperErrorKey) {
+      setHiddenScraperErrorKey(null)
+      return
+    }
+    try {
+      if (sessionStorage.getItem('flipper_dismissed_scraper_error') === scraperErrorKey) {
+        setHiddenScraperErrorKey(scraperErrorKey)
+      } else {
+        setHiddenScraperErrorKey(null)
+      }
+    } catch {
+      setHiddenScraperErrorKey(null)
+    }
+  }, [scraperErrorKey])
+
+  const showScraperErrorBanner = Boolean(
+    globalError && scraperErrorKey && hiddenScraperErrorKey !== scraperErrorKey,
+  )
+
+  function dismissScraperErrorBanner() {
+    if (!scraperErrorKey) return
+    try {
+      sessionStorage.setItem('flipper_dismissed_scraper_error', scraperErrorKey)
+    } catch {
+      /* ignore */
+    }
+    setHiddenScraperErrorKey(scraperErrorKey)
+  }
+
+  async function clearScraperLastRunError() {
+    if (!errorSource?.id) return
+    const { error } = await supabase
+      .from('scraping_sources')
+      .update({ last_run_error: null })
+      .eq('id', errorSource.id)
+    if (error) {
+      toast.error(error.message)
+      return
+    }
+    try {
+      sessionStorage.removeItem('flipper_dismissed_scraper_error')
+    } catch {
+      /* ignore */
+    }
+    setHiddenScraperErrorKey(null)
+    toast.success('Aviso de error eliminado')
+    load()
+  }
 
   async function saveSource(e: React.FormEvent) {
     e.preventDefault()
@@ -240,16 +294,32 @@ export function ConfigPage() {
 
   return (
     <div className="relative pb-24">
-      {globalError && (
+      {showScraperErrorBanner && globalError && (
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-text">
-          <span>Scraper falló: {globalError}</span>
-          <button
-            type="button"
-            className="rounded-md border border-border bg-card px-3 py-1 text-xs text-text-secondary hover:bg-card-hover"
-            onClick={() => load()}
-          >
-            Reintentar lectura
-          </button>
+          <span className="min-w-0 flex-1">Scraper falló: {globalError}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="rounded-md border border-border bg-card px-3 py-1 text-xs text-text-secondary hover:bg-card-hover"
+              onClick={() => load()}
+            >
+              Reintentar lectura
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-border bg-card px-3 py-1 text-xs text-text-secondary hover:bg-card-hover"
+              onClick={dismissScraperErrorBanner}
+            >
+              Cerrar
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-danger/50 bg-card px-3 py-1 text-xs text-text hover:bg-danger/10"
+              onClick={() => void clearScraperLastRunError()}
+            >
+              Limpiar aviso
+            </button>
+          </div>
         </div>
       )}
 
