@@ -113,7 +113,7 @@ export function SavedPage() {
           aquí automáticamente.
         </p>
         <Link
-          to="/config"
+          to="/properties/config"
           className="mt-4 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
         >
           Ir a Configuración

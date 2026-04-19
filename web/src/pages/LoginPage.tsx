@@ -27,7 +27,7 @@ export function LoginPage() {
   }
 
   if (sessionOk) {
-    return <Navigate to="/config" replace />
+    return <Navigate to="/properties/config" replace />
   }
 
   if (sessionOk === null) {
