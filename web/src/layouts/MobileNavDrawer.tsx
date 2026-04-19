@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { NavSidebarFooter } from './NavSidebarFooter'
 import { NavTree } from './NavTree'
 import { useShellNav } from './ShellNavContext'
@@ -30,9 +31,9 @@ export function MobileNavDrawer({ open, onClose }: Props) {
 
   if (!open) return null
 
-  return (
+  const node = (
     <div
-      className="fixed inset-0 z-40 md:hidden"
+      className="fixed inset-0 z-[100] md:hidden"
       role="dialog"
       aria-modal="true"
       aria-label="Menú de navegación"
@@ -71,4 +72,6 @@ export function MobileNavDrawer({ open, onClose }: Props) {
       </aside>
     </div>
   )
+
+  return typeof document !== 'undefined' ? createPortal(node, document.body) : null
 }

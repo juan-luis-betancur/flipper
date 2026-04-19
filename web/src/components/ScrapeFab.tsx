@@ -72,7 +72,7 @@ export function ScrapeFab({ onComplete }: Props) {
   }, [onComplete])
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-2">
+    <div className="fixed z-50 flex flex-col items-end gap-2 max-md:right-4 max-md:bottom-[max(6rem,calc(4rem+env(safe-area-inset-bottom,0px)+0.75rem))] md:bottom-6 md:right-6">
       {phase && (
         <div className="max-w-xs rounded-lg border border-border bg-card px-3 py-2 text-xs text-text-secondary shadow-lg">
           {phase}
