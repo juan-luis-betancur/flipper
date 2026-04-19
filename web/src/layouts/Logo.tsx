@@ -3,10 +3,12 @@ import clsx from 'clsx'
 type Props = {
   size?: number
   withWordmark?: boolean
+  /** Texto del wordmark para sidebar oscuro */
+  variant?: 'default' | 'onDark'
   className?: string
 }
 
-export function Logo({ size = 32, withWordmark = true, className }: Props) {
+export function Logo({ size = 32, withWordmark = true, variant = 'default', className }: Props) {
   return (
     <div className={clsx('flex items-center gap-2', className)}>
       <svg
@@ -52,7 +54,12 @@ export function Logo({ size = 32, withWordmark = true, className }: Props) {
         />
       </svg>
       {withWordmark && (
-        <span className="text-[17px] font-semibold tracking-tight text-text">
+        <span
+          className={clsx(
+            'text-[17px] font-semibold tracking-tight',
+            variant === 'onDark' ? 'text-[color:var(--color-sidebar-text)]' : 'text-text',
+          )}
+        >
           Flipper
         </span>
       )}

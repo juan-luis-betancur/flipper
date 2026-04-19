@@ -1,43 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import clsx from 'clsx'
 import { supabase } from '../lib/supabase'
 import { Logo } from './Logo'
+import { useTheme } from '../lib/theme'
 
-const sections = [
-  {
-    to: '/properties',
-    label: 'Propiedades',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 9.5 12 3l9 6.5V21a1 1 0 0 1-1 1h-5v-7h-6v7H4a1 1 0 0 1-1-1z" />
-      </svg>
-    ),
-  },
-  {
-    to: '/contracts',
-    label: 'Contratos',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-        <path d="M14 2v6h6" />
-        <path d="M8 13h8M8 17h5" />
-      </svg>
-    ),
-  },
-  {
-    to: '/projects',
-    label: 'Proyectos',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="4" width="18" height="16" rx="2" />
-        <path d="M3 10h18M8 4v6M16 4v6" />
-      </svg>
-    ),
-  },
-]
-
+/** Barra superior solo en móvil; en desktop la navegación está en SideNav. */
 export function TopBar() {
+  const { theme, toggleTheme } = useTheme()
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -56,58 +25,66 @@ export function TopBar() {
   }
 
   return (
-    <header className="sticky top-0 z-30 border-b border-border bg-card/80 backdrop-blur-md">
-      <div className="mx-auto flex h-16 w-full max-w-[1400px] items-center gap-6 px-4 sm:px-6 md:px-8">
-        <Logo />
+    <header className="sticky top-0 z-30 border-b border-border bg-card/90 backdrop-blur-md md:hidden">
+      <div className="flex h-14 w-full items-center gap-3 px-4">
+        <NavLink
+          to="/properties/config"
+          className="shrink-0 outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded-md"
+        >
+          <Logo size={30} withWordmark />
+        </NavLink>
 
-        <nav className="ml-2 hidden flex-1 items-center gap-1 md:flex">
-          {sections.map((s) => (
-            <NavLink
-              key={s.to}
-              to={s.to}
-              className={({ isActive }) =>
-                clsx(
-                  'inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all',
-                  isActive
-                    ? 'bg-accent-soft text-accent'
-                    : 'text-text-secondary hover:bg-card-hover hover:text-text',
-                )
-              }
-            >
-              {s.icon}
-              {s.label}
-            </NavLink>
-          ))}
-        </nav>
-
-        <div className="relative ml-auto" ref={menuRef}>
+        <div className="ml-auto flex items-center gap-1">
           <button
             type="button"
-            onClick={() => setMenuOpen((v) => !v)}
+            onClick={toggleTheme}
             className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-text-secondary transition-colors hover:border-border-strong hover:text-text"
-            aria-label="Menú de usuario"
+            aria-label={theme === 'dark' ? 'Activar tema claro' : 'Activar tema oscuro'}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-              <circle cx="12" cy="7" r="4" />
-            </svg>
+            {theme === 'dark' ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+            )}
           </button>
-          {menuOpen && (
-            <div className="absolute right-0 top-11 z-40 w-48 overflow-hidden rounded-xl border border-border bg-card elevated-shadow">
-              <button
-                type="button"
-                onClick={signOut}
-                className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-text-secondary transition-colors hover:bg-card-hover hover:text-text"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                  <polyline points="16 17 21 12 16 7" />
-                  <line x1="21" y1="12" x2="9" y2="12" />
-                </svg>
-                Cerrar sesión
-              </button>
-            </div>
-          )}
+
+          <div className="relative" ref={menuRef}>
+            <button
+              type="button"
+              onClick={() => setMenuOpen((v) => !v)}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-text-secondary transition-colors hover:border-border-strong hover:text-text"
+              aria-label="Menú de usuario"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </svg>
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-11 z-40 w-48 overflow-hidden rounded-xl border border-border bg-card elevated-shadow">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    void signOut()
+                  }}
+                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-text-secondary transition-colors hover:bg-card-hover hover:text-text"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                    <polyline points="16 17 21 12 16 7" />
+                    <line x1="21" y1="12" x2="9" y2="12" />
+                  </svg>
+                  Cerrar sesión
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </header>

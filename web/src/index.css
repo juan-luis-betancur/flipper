@@ -23,6 +23,53 @@
   --color-danger: #e11d48;
   --color-opportunity: #ea580c;
   --color-opportunity-muted: rgba(234, 88, 12, 0.12);
+  --color-chart-grid: #e7e5de;
+  --color-chart-axis: #98a0b3;
+  --color-chart-tick: #52607a;
+  --color-chart-tooltip-bg: #ffffff;
+  --color-chart-tooltip-border: #e7e5de;
+  --color-sidebar: #0e1627;
+  --color-sidebar-border: rgba(255, 255, 255, 0.08);
+  --color-sidebar-hover: rgba(255, 255, 255, 0.06);
+  --color-sidebar-active-bg: rgba(99, 102, 241, 0.15);
+  --color-sidebar-active-ring: rgba(99, 102, 241, 0.35);
+  --color-sidebar-muted: rgba(255, 255, 255, 0.45);
+  --color-sidebar-text: rgba(255, 255, 255, 0.88);
+}
+
+html.dark {
+  color-scheme: dark;
+  --color-bg: #121722;
+  --color-bg-secondary: #1a2235;
+  --color-card: #1c2533;
+  --color-card-hover: #232e3f;
+  --color-border: #2d3a4d;
+  --color-border-strong: #3d4d63;
+  --color-text: #e8ecf4;
+  --color-text-secondary: #9aa8bd;
+  --color-text-muted: #7a879c;
+  --color-accent: #818cf8;
+  --color-accent-hover: #a5b4fc;
+  --color-accent-soft: rgba(129, 140, 248, 0.18);
+  --color-brand-from: #818cf8;
+  --color-brand-to: #c084fc;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #fb7185;
+  --color-opportunity: #fb923c;
+  --color-opportunity-muted: rgba(251, 146, 60, 0.15);
+  --color-chart-grid: #2d3a4d;
+  --color-chart-axis: #7a879c;
+  --color-chart-tick: #9aa8bd;
+  --color-chart-tooltip-bg: #1c2533;
+  --color-chart-tooltip-border: #2d3a4d;
+  --color-sidebar: #0a0f18;
+  --color-sidebar-border: rgba(255, 255, 255, 0.06);
+  --color-sidebar-hover: rgba(255, 255, 255, 0.05);
+  --color-sidebar-active-bg: rgba(129, 140, 248, 0.2);
+  --color-sidebar-active-ring: rgba(129, 140, 248, 0.45);
+  --color-sidebar-muted: rgba(255, 255, 255, 0.4);
+  --color-sidebar-text: rgba(255, 255, 255, 0.92);
 }
 
 @font-face {
@@ -44,7 +91,7 @@
 }
 
 html {
-  color-scheme: light;
+  color-scheme: light dark;
 }
 
 body {
@@ -55,6 +102,11 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Warm main surface (mock #f4f3ee) — light only */
+html:not(.dark) body {
+  background: #f4f3ee;
 }
 
 #root {
@@ -88,8 +140,20 @@ body {
     0 4px 14px rgba(15, 23, 41, 0.06);
 }
 
+html.dark .card-shadow {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.25),
+    0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
 .elevated-shadow {
   box-shadow:
     0 2px 4px rgba(15, 23, 41, 0.05),
     0 12px 40px rgba(15, 23, 41, 0.08);
+}
+
+html.dark .elevated-shadow {
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.3),
+    0 12px 40px rgba(0, 0, 0, 0.45);
 }
