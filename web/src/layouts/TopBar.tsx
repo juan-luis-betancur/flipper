@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { Logo } from './Logo'
+import { MobileNavDrawer } from './MobileNavDrawer'
 import { useTheme } from '../lib/theme'
 
 /** Barra superior solo en móvil; en desktop la navegación está en SideNav. */
 export function TopBar() {
   const { theme, toggleTheme } = useTheme()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -26,15 +28,29 @@ export function TopBar() {
 
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-card/90 backdrop-blur-md md:hidden">
-      <div className="flex h-14 w-full items-center gap-3 px-4">
+      <div className="flex h-14 w-full items-center gap-2 px-4">
+        <button
+          type="button"
+          onClick={() => setDrawerOpen(true)}
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-text-secondary transition-colors hover:border-border-strong hover:text-text"
+          aria-label="Abrir menú de navegación"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <line x1="4" x2="20" y1="6" y2="6" />
+            <line x1="4" x2="20" y1="12" y2="12" />
+            <line x1="4" x2="20" y1="18" y2="18" />
+          </svg>
+        </button>
+
         <NavLink
           to="/properties/config"
-          className="shrink-0 outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded-md"
+          className="min-w-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded-md"
+          onClick={() => setDrawerOpen(false)}
         >
-          <Logo size={30} withWordmark />
+          <Logo size={30} withWordmark className="min-w-0" />
         </NavLink>
 
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={toggleTheme}
@@ -87,6 +103,8 @@ export function TopBar() {
           </div>
         </div>
       </div>
+
+      <MobileNavDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
     </header>
   )
 }
