@@ -65,7 +65,7 @@ Configura **un** disparador HTTP (nativo del PaaS o servicio externo como [cron-
 
 **Render:** crea un [Cron Job](https://render.com/docs/cronjobs) que ejecute un `curl` contra esa URL con el header, o usa su integración HTTP si la ofrece.
 
-**Railway:** usa [Cron Jobs](https://docs.railway.com/reference/cron-jobs) o un servicio externo que haga el `POST` periódico.
+**Railway:** servicio dedicado en el repo [`railway-cron/`](railway-cron/README.md) (Docker + `curl`, mismo `POST`); en el panel: **Root Directory** = `railway-cron`, variables `FLIPPER_API_BASE_URL` y `CRON_SECRET`, y [Cron Schedule](https://docs.railway.com/reference/cron-jobs) en **UTC**. Alternativa: servicio externo que haga el `POST` periódico.
 
 ### 3. Comprobar que funciona
 

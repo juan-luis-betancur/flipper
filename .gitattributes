@@ -1,0 +1,2 @@
+# Scripts ejecutados en Linux (Docker); evita CRLF en Windows.
+railway-cron/entrypoint.sh text eol=lf
