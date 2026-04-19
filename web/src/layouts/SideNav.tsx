@@ -22,17 +22,12 @@ export function SideNav() {
       )}
     >
       <div className="flex h-full min-h-0 flex-1 flex-col px-2 pb-4 pt-4">
-        <div
-          className={clsx(
-            'mb-3 flex shrink-0 items-center gap-1',
-            sidebarCollapsed ? 'flex-col' : 'flex-row',
-          )}
-        >
+        <div className="mb-3 flex shrink-0 justify-center">
           <NavLink
             to="/properties/config"
             className={clsx(
               'flex min-w-0 items-center rounded-lg px-1 py-1 outline-none transition-opacity hover:opacity-95 focus-visible:ring-2 focus-visible:ring-accent/50',
-              sidebarCollapsed ? 'justify-center' : 'min-w-0 flex-1',
+              sidebarCollapsed ? 'justify-center' : 'w-full justify-start',
             )}
           >
             <Logo
@@ -42,10 +37,24 @@ export function SideNav() {
               className="min-w-0"
             />
           </NavLink>
+        </div>
+
+        <NavTree
+          mode={sidebarCollapsed ? 'rail' : 'wide'}
+          propertiesSubOpen={propertiesSubOpen}
+          onTogglePropertiesSub={togglePropertiesSub}
+          railFlyoutOpen={railFlyoutOpen}
+          setRailFlyoutOpen={setRailFlyoutOpen}
+        />
+
+        <div className="mt-auto flex shrink-0 flex-col gap-2 border-t border-sidebar-border pt-3">
           <button
             type="button"
             onClick={toggleSidebarCollapsed}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-sidebar-muted transition-colors hover:bg-sidebar-hover hover:text-sidebar-text"
+            className={clsx(
+              'flex w-full items-center gap-2 rounded-lg text-sidebar-muted transition-colors hover:bg-sidebar-hover hover:text-sidebar-text',
+              sidebarCollapsed ? 'justify-center px-2 py-2' : 'px-3 py-2 text-left text-xs font-medium',
+            )}
             aria-expanded={!sidebarCollapsed}
             aria-label={sidebarCollapsed ? 'Expandir menú lateral' : 'Contraer menú lateral'}
           >
@@ -60,18 +69,14 @@ export function SideNav() {
                 <path d="M9 6H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
               </svg>
             )}
+            {!sidebarCollapsed && <span>Contraer menú</span>}
+            {sidebarCollapsed && <span className="sr-only">Expandir menú lateral</span>}
           </button>
+          <NavSidebarFooter
+            compact={sidebarCollapsed}
+            className="mt-0 border-t-0 pt-0"
+          />
         </div>
-
-        <NavTree
-          mode={sidebarCollapsed ? 'rail' : 'wide'}
-          propertiesSubOpen={propertiesSubOpen}
-          onTogglePropertiesSub={togglePropertiesSub}
-          railFlyoutOpen={railFlyoutOpen}
-          setRailFlyoutOpen={setRailFlyoutOpen}
-        />
-
-        <NavSidebarFooter compact={sidebarCollapsed} />
       </div>
     </aside>
   )

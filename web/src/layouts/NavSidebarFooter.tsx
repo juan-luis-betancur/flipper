@@ -6,9 +6,11 @@ import clsx from 'clsx'
 type Props = {
   /** Solo iconos (rail colapsado) */
   compact?: boolean
+  /** Cuando el pie va dentro de un bloque que ya tiene borde superior (p. ej. con botón colapsar encima) */
+  className?: string
 }
 
-export function NavSidebarFooter({ compact }: Props) {
+export function NavSidebarFooter({ compact, className }: Props) {
   const { theme, toggleTheme } = useTheme()
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -31,7 +33,12 @@ export function NavSidebarFooter({ compact }: Props) {
     'flex w-full items-center gap-2 rounded-lg text-sidebar-muted transition-colors hover:bg-sidebar-hover hover:text-sidebar-text'
 
   return (
-    <div className="mt-auto shrink-0 space-y-2 border-t border-sidebar-border pt-4">
+    <div
+      className={clsx(
+        'mt-auto shrink-0 space-y-2 border-t border-sidebar-border pt-4',
+        className,
+      )}
+    >
       <button
         type="button"
         onClick={toggleTheme}
