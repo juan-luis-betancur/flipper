@@ -4,7 +4,6 @@ FROM curlimages/curl:8.10.1
 
 USER root
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod 755 /entrypoint.sh && chown curl:curl /entrypoint.sh
+RUN chmod 755 /entrypoint.sh
 
-USER curl
 ENTRYPOINT ["/entrypoint.sh"]
