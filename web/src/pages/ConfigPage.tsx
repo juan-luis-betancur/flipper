@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { requireSupabase } from '../lib/supabase'
 import { buildFincaRaizListadoUrl } from '../lib/fincaRaizUrl'
-import { PRESET_NEIGHBORHOODS } from '../constants/neighborhoods'
 import type { AlertFilter, ListingPlatform, PublicationFilter, ScrapingSource, TelegramSettings } from '../types/db'
 import { ScrapeFab } from '../components/ScrapeFab'
 import { CurrencyTextInput } from '../components/CurrencyTextInput'
@@ -88,10 +87,13 @@ export function ConfigPage() {
   }, [load])
 
   const previewUrl = useMemo(() => {
+    const u = form.list_url.trim()
+    if (u) return u
     if (form.platform === 'mercado_libre') {
-      const u = form.list_url.trim()
-      return u || 'https://listado.mercadolibre.com.co/… (pega la URL del listado)'
+      return 'https://listado.mercadolibre.com.co/… (pega la URL del listado)'
     }
+    // FR: si es una fuente antigua (sin list_url) mostramos la URL computada
+    // a partir de barrios + filtro como referencia read-only.
     return buildFincaRaizListadoUrl(form.neighborhoods, form.publication_filter)
   }, [form.platform, form.list_url, form.neighborhoods, form.publication_filter])
 
@@ -157,10 +159,16 @@ export function ConfigPage() {
       toast.error('Nombre requerido')
       return
     }
+    const urlTrim = form.list_url.trim()
     if (form.platform === 'mercado_libre') {
-      const u = form.list_url.trim()
-      if (!u.startsWith('https://listado.mercadolibre.com.co')) {
+      if (!urlTrim.startsWith('https://listado.mercadolibre.com.co')) {
         toast.error('La URL debe ser de listado.mercadolibre.com.co (https)')
+        return
+      }
+    } else {
+      // finca_raiz: ahora también pedimos URL directa (ej. https://www.fincaraiz.com.co/venta/apartamentos/antioquia/el-poblado/publicado-ayer)
+      if (!urlTrim.startsWith('https://www.fincaraiz.com.co')) {
+        toast.error('La URL debe ser de www.fincaraiz.com.co (https)')
         return
       }
     }
@@ -168,10 +176,10 @@ export function ConfigPage() {
       user_id: userId,
       name: form.name.trim(),
       platform: form.platform,
-      list_url: form.platform === 'mercado_libre' ? form.list_url.trim() : null,
-      neighborhoods: form.platform === 'mercado_libre' ? [] : form.neighborhoods,
-      publication_filter:
-        form.platform === 'mercado_libre' ? ('none' as PublicationFilter) : form.publication_filter,
+      list_url: urlTrim,
+      // Dejamos los campos viejos vacíos; el backend prioriza list_url cuando existe.
+      neighborhoods: [] as string[],
+      publication_filter: 'none' as PublicationFilter,
       is_active: true,
     }
     if (editingId) {
@@ -534,84 +542,29 @@ export function ConfigPage() {
                   <p className="mt-1 text-xs text-text-muted">La plataforma no se puede cambiar al editar.</p>
                 )}
               </label>
-              {form.platform === 'mercado_libre' ? (
-                <label className="block text-sm text-text-secondary">
-                  URL del listado (listado.mercadolibre.com.co)
-                  <textarea
-                    required
-                    rows={3}
-                    value={form.list_url}
-                    onChange={(e) => setForm((f) => ({ ...f, list_url: e.target.value }))}
-                    placeholder="https://listado.mercadolibre.com.co/inmuebles/..."
-                    className="mt-1 w-full rounded-md border border-border bg-bg-secondary px-3 py-2 font-mono text-xs text-text"
-                  />
-                </label>
-              ) : (
-                <>
-                  <div>
-                    <p className="text-sm text-text-secondary">Barrios</p>
-                    <div className="mt-2 flex max-h-32 flex-wrap gap-1 overflow-y-auto">
-                      {PRESET_NEIGHBORHOODS.map((b) => {
-                        const on = form.neighborhoods.includes(b)
-                        return (
-                          <button
-                            key={b}
-                            type="button"
-                            onClick={() =>
-                              setForm((f) => ({
-                                ...f,
-                                neighborhoods: on
-                                  ? f.neighborhoods.filter((x) => x !== b)
-                                  : [...f.neighborhoods, b],
-                              }))
-                            }
-                            className={`rounded-full border px-2 py-0.5 text-xs ${
-                              on ? 'border-accent bg-accent/20 text-accent' : 'border-border text-text-secondary'
-                            }`}
-                          >
-                            {b}
-                          </button>
-                        )
-                      })}
-                    </div>
-                    <div className="mt-2 flex gap-2">
-                      <input
-                        placeholder="Barrio personalizado"
-                        value={form.customBarrio}
-                        onChange={(e) => setForm((f) => ({ ...f, customBarrio: e.target.value }))}
-                        className="flex-1 rounded-md border border-border bg-bg-secondary px-2 py-1 text-sm text-text"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const v = form.customBarrio.trim()
-                          if (!v || form.neighborhoods.includes(v)) return
-                          setForm((f) => ({ ...f, neighborhoods: [...f.neighborhoods, v], customBarrio: '' }))
-                        }}
-                        className="rounded-md border border-border px-2 text-sm text-text-secondary"
-                      >
-                        Añadir
-                      </button>
-                    </div>
-                  </div>
-                  <label className="block text-sm text-text-secondary">
-                    Filtro de publicación
-                    <select
-                      value={form.publication_filter}
-                      onChange={(e) =>
-                        setForm((f) => ({ ...f, publication_filter: e.target.value as PublicationFilter }))
-                      }
-                      className="mt-1 w-full rounded-md border border-border bg-bg-secondary px-3 py-2 text-text"
-                    >
-                      {PUBLICATION_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </>
-              )}
+              <label className="block text-sm text-text-secondary">
+                {form.platform === 'mercado_libre'
+                  ? 'URL del listado (listado.mercadolibre.com.co)'
+                  : 'URL del listado (www.fincaraiz.com.co)'}
+                <textarea
+                  required
+                  rows={3}
+                  value={form.list_url}
+                  onChange={(e) => setForm((f) => ({ ...f, list_url: e.target.value }))}
+                  placeholder={
+                    form.platform === 'mercado_libre'
+                      ? 'https://listado.mercadolibre.com.co/inmuebles/...'
+                      : 'https://www.fincaraiz.com.co/venta/apartamentos/antioquia/el-poblado/publicado-ayer'
+                  }
+                  className="mt-1 w-full rounded-md border border-border bg-bg-secondary px-3 py-2 font-mono text-xs text-text"
+                />
+                {form.platform === 'finca_raiz' && (
+                  <p className="mt-1 text-xs text-text-muted">
+                    Pega la URL completa del listado. Puedes agregar filtros como{' '}
+                    <code className="text-text-secondary">publicado-ayer</code> al final.
+                  </p>
+                )}
+              </label>
               <div>
                 <p className="text-sm text-text-secondary">Vista previa URL</p>
                 <pre className="mt-1 overflow-x-auto rounded-md border border-border bg-bg p-2 text-[10px] text-text-muted">

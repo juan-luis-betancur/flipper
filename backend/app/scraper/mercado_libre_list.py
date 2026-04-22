@@ -8,6 +8,7 @@ Smoke / producción (p. ej. Railway):
 """
 from __future__ import annotations
 
+import random
 import re
 from typing import Any
 
@@ -15,6 +16,21 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .mercado_libre_challenge import ML_BROWSER_HEADERS, fetch_html_after_challenge
+
+# Pool de User-Agents de Chrome recientes. Reduce fingerprinting trivial.
+_CHROME_UA_POOL = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+]
+
+
+def _pick_user_agent(default_ua: str | None = None) -> str:
+    ua = (default_ua or "").strip()
+    if ua and "FlipperMVP" not in ua:
+        return ua
+    return random.choice(_CHROME_UA_POOL)
 
 # Tamaño de página típico en JSON de paginación ML (49 -> 97 = +48).
 _ML_PAGE_STEP = 48
@@ -121,13 +137,31 @@ def gather_listing_item_urls(
 
 
 def ml_client_with_optional_cookie(ml_cookie: str | None) -> httpx.Client:
+    """Cliente httpx con UA rotado + proxy residencial opcional.
+
+    Si ``ML_PROXY_URL`` está definido en el entorno (formato
+    ``http://user:pass@host:port``), se enruta todo el tráfico ML por ese proxy.
+    Recomendado: proxies residenciales (Decodo / IPRoyal / Bright Data) porque
+    las IPs de datacenter (Railway) están en listas negras de Akamai Bot Manager.
+    """
     from ..config import get_settings
 
+    settings = get_settings()
     headers = dict(ML_BROWSER_HEADERS)
-    ua = get_settings().user_agent.strip()
-    if ua:
-        headers["User-Agent"] = ua
-    c = httpx.Client(headers=headers, follow_redirects=True, timeout=60.0)
+    # Rotamos UA: si el user_agent configurado es el default genérico "FlipperMVP",
+    # elegimos uno del pool; si el usuario puso uno custom se respeta.
+    headers["User-Agent"] = _pick_user_agent(settings.user_agent)
+
+    client_kwargs: dict[str, Any] = {
+        "headers": headers,
+        "follow_redirects": True,
+        "timeout": 60.0,
+    }
+    if settings.ml_proxy_url:
+        # httpx>=0.28: el parámetro es `proxy` (string único). httpx<0.28 usaba `proxies`.
+        client_kwargs["proxy"] = settings.ml_proxy_url
+
+    c = httpx.Client(**client_kwargs)
     if ml_cookie and ml_cookie.strip():
         c.headers["Cookie"] = ml_cookie.strip()
     return c

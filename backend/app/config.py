@@ -17,6 +17,8 @@ class Settings:
     scrape_delay_seconds: float
     scrape_max_properties: int
     user_agent: str
+    ml_proxy_url: str | None
+    scrapingbee_api_key: str | None
 
 
 @lru_cache
@@ -33,4 +35,6 @@ def get_settings() -> Settings:
             "SCRAPE_USER_AGENT",
             "FlipperMVP/1.0 (+https://example.com)",
         ),
+        ml_proxy_url=(os.getenv("ML_PROXY_URL") or "").strip() or None,
+        scrapingbee_api_key=(os.getenv("SCRAPINGBEE_API_KEY") or "").strip() or None,
     )

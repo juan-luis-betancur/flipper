@@ -8,7 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .auth_jwt import bearer_dep
 from .config import get_settings
-from .scraper.pipeline import run_pipeline
+from .scraper.pipeline import (
+    run_pipeline,
+    run_scrape_finca_raiz,
+    run_scrape_mercado_libre,
+    send_daily_digest,
+)
 from .supabase_client import get_supabase
 from .telegram_bot import (
     TELEGRAM_HINT_PROPERTY_NOT_FOUND,
@@ -60,30 +65,97 @@ def scrape_run(background_tasks: BackgroundTasks, user_id: str = Depends(bearer_
     return {"run_id": run_id}
 
 
-@app.post("/api/cron/daily-scrape")
-def cron_daily(background_tasks: BackgroundTasks, x_cron_secret: str | None = Header(None)):
+def _require_cron_secret(x_cron_secret: str | None) -> None:
     s = get_settings()
     if not s.cron_secret or x_cron_secret != s.cron_secret:
         raise HTTPException(status_code=403, detail="Invalid cron secret")
+
+
+def _active_user_ids_for_platform(platform: str | None) -> list[str]:
     sb = get_supabase()
-    res = sb.table("scraping_sources").select("user_id").eq("is_active", True).execute()
-    user_ids = list({r["user_id"] for r in (res.data or [])})
-    for uid in user_ids:
-        ins = (
-            sb.table("scraper_runs")
-            .insert(
-                {
-                    "user_id": uid,
-                    "estado": "running",
-                    "etapa": "Cron diario…",
-                    "fecha_inicio": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            .execute()
+    q = sb.table("scraping_sources").select("user_id").eq("is_active", True)
+    if platform:
+        q = q.eq("platform", platform)
+    res = q.execute()
+    return list({r["user_id"] for r in (res.data or [])})
+
+
+def _enqueue_run(uid: str, etapa: str, fn, background_tasks: BackgroundTasks) -> None:
+    sb = get_supabase()
+    ins = (
+        sb.table("scraper_runs")
+        .insert(
+            {
+                "user_id": uid,
+                "estado": "running",
+                "etapa": etapa,
+                "fecha_inicio": datetime.now(timezone.utc).isoformat(),
+            }
         )
-        rows = ins.data or []
-        if rows:
-            background_tasks.add_task(run_pipeline, uid, rows[0]["id"])
+        .execute()
+    )
+    rows = ins.data or []
+    if rows:
+        background_tasks.add_task(fn, uid, rows[0]["id"])
+
+
+@app.post("/api/cron/scrape-mercado-libre")
+def cron_scrape_ml(
+    background_tasks: BackgroundTasks, x_cron_secret: str | None = Header(None)
+):
+    """Corre cada noche (23:50 Bogotá). Scrapea ML pero NO envía Telegram.
+
+    Las propiedades quedan con notificada_at=NULL; las entrega el digest de la mañana.
+    """
+    _require_cron_secret(x_cron_secret)
+    user_ids = _active_user_ids_for_platform("mercado_libre")
+    for uid in user_ids:
+        _enqueue_run(uid, "Cron ML (23:50)…", run_scrape_mercado_libre, background_tasks)
+    return {"users": len(user_ids), "platform": "mercado_libre"}
+
+
+@app.post("/api/cron/scrape-finca-raiz")
+def cron_scrape_fr(
+    background_tasks: BackgroundTasks, x_cron_secret: str | None = Header(None)
+):
+    """Corre cada madrugada (05:30 Bogotá) con URL ``publicado-ayer``. NO envía Telegram.
+
+    El digest (05:35) consolida ML de anoche + FR de esta madrugada.
+    """
+    _require_cron_secret(x_cron_secret)
+    user_ids = _active_user_ids_for_platform("finca_raiz")
+    for uid in user_ids:
+        _enqueue_run(uid, "Cron FR (05:30)…", run_scrape_finca_raiz, background_tasks)
+    return {"users": len(user_ids), "platform": "finca_raiz"}
+
+
+@app.post("/api/cron/send-daily-digest")
+def cron_send_digest(
+    background_tasks: BackgroundTasks, x_cron_secret: str | None = Header(None)
+):
+    """Envía el resumen consolidado a Telegram (05:35 Bogotá).
+
+    Recorre todos los usuarios con cualquier fuente activa y dispara
+    ``send_daily_digest`` en background. Idempotente vía ``notificada_at``.
+    """
+    _require_cron_secret(x_cron_secret)
+    user_ids = _active_user_ids_for_platform(None)
+    for uid in user_ids:
+        background_tasks.add_task(send_daily_digest, uid)
+    return {"users": len(user_ids), "action": "digest"}
+
+
+@app.post("/api/cron/daily-scrape")
+def cron_daily(background_tasks: BackgroundTasks, x_cron_secret: str | None = Header(None)):
+    """Legacy — corre todo en un solo paso (ML + FR + digest).
+
+    Se mantiene por compatibilidad con el servicio ``railway-cron`` antiguo
+    hasta que se migren los 3 nuevos servicios. Úsese para pruebas locales.
+    """
+    _require_cron_secret(x_cron_secret)
+    user_ids = _active_user_ids_for_platform(None)
+    for uid in user_ids:
+        _enqueue_run(uid, "Cron diario (legacy)…", run_pipeline, background_tasks)
     return {"users": len(user_ids)}
 
 
