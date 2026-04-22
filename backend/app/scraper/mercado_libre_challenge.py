@@ -2,10 +2,20 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import re
 import time
 import urllib.parse
 
 import httpx
+
+log = logging.getLogger(__name__)
+
+# URL inequívoca de publicación ML Colombia. Si aparece al menos una vez en el
+# HTML, la página trae listados reales (no es soft-block con Andes chrome vacío).
+_MCO_ITEM_IN_HTML_RE = re.compile(
+    r"https://[a-z0-9.-]+\.mercadolibre\.com\.co/MCO-\d+-", re.I
+)
 
 ML_BROWSER_HEADERS = {
     "User-Agent": (
@@ -68,26 +78,30 @@ def fetch_html_after_challenge(
     last_status: int | None = None
     last_len: int = 0
 
+    is_listing = "/_Desde_" in url or "listado.mercadolibre" in url
     for attempt in range(1, max_attempts + 1):
         r1 = client.get(url)
         last_status = r1.status_code
-        last_len = len(r1.text)
-        # Señales de "página real" que ML cambia con frecuencia:
-        # - listado: aparece "ui-search" (class legacy) o "andes-pagination" (Andes DS)
-        #   o URLs tipo "mercadolibre.com.co/MCO-\d+" (items en el HTML).
-        # - detalle: "ui-pdp" (class legacy) o "andes-money-amount" (precio Andes).
-        if last_len > 50_000 and any(
-            marker in r1.text
-            for marker in (
-                "ui-search",
-                "andes-pagination",
-                "ui-pdp",
-                "andes-money-amount",
-                "mercadolibre.com.co/MCO-",
-            )
-        ):
-            return r1.text
+        body = r1.text
+        last_len = len(body)
+        # Señales duras de "página real":
+        # - Listados: al menos una URL /MCO-\d+- (item real) o "ui-search".
+        # - Detalles: "ui-pdp" / "andes-money-amount" o meta product:price.
+        if last_len > 50_000:
+            has_items = bool(_MCO_ITEM_IN_HTML_RE.search(body))
+            if is_listing and (has_items or "ui-search" in body):
+                log.info("ML fetch ok url=%s status=%s len=%s items_marker=%s",
+                         url, last_status, last_len, has_items)
+                return body
+            if not is_listing and any(
+                m in body for m in ("ui-pdp", "andes-money-amount", 'property="product:price:amount"')
+            ):
+                return body
         bm = get_bmstate_value(client)
+        log.info(
+            "ML fetch intermedio url=%s attempt=%s status=%s len=%s bmstate=%s",
+            url, attempt, last_status, last_len, bool(bm),
+        )
         if bm:
             break
         if attempt < max_attempts:
@@ -108,4 +122,9 @@ def fetch_html_after_challenge(
     a = solve_bmstate_pow(token, diff)
     apply_bmc_cookie(client, token, a)
     r2 = client.get(url)
+    log.info(
+        "ML fetch post-PoW url=%s status=%s len=%s has_mco=%s",
+        url, r2.status_code, len(r2.text),
+        bool(_MCO_ITEM_IN_HTML_RE.search(r2.text)),
+    )
     return r2.text
