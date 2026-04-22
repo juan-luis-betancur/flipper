@@ -311,39 +311,139 @@ def send_daily_digest(user_id: str) -> dict:
 
 
 def run_pipeline(user_id: str, run_id: str) -> None:
-    """Legacy: corre ambos scrapers y dispara el digest.
+    """Legacy / manual: corre ambos scrapers **agregando stats al mismo run_id**
+    y dispara el digest al final.
 
-    El endpoint ``/api/scrape/run`` (botón manual) y el legacy
-    ``/api/cron/daily-scrape`` usan este camino. El nuevo cron diario está
-    separado en tres endpoints distintos (ver ``main.py``).
+    Usado por el botón manual ``/api/scrape/run`` y el cron legacy
+    ``/api/cron/daily-scrape``. El frontend observa este run_id y espera ver
+    totales que incluyan ambas plataformas; por eso no se delega a los dos
+    pipelines por plataforma (que cierran el run con sus propios counts).
     """
     sb = get_supabase()
+    settings = get_settings()
+    lines: list[str] = []
 
-    # Corre FR en el mismo run_id (principal).
-    run_scrape_finca_raiz(user_id, run_id)
+    def upd(**kwargs):
+        sb.table("scraper_runs").update(kwargs).eq("id", run_id).execute()
 
-    # Corre ML en un run_id separado para no pisar el primero.
-    ml_ins = (
-        sb.table("scraper_runs")
-        .insert(
-            {
-                "user_id": user_id,
-                "estado": "running",
-                "etapa": "Mercado Libre (legacy run)",
-                "fecha_inicio": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-        .execute()
-    )
-    ml_rows = ml_ins.data or []
-    if ml_rows:
-        try:
-            run_scrape_mercado_libre(user_id, ml_rows[0]["id"])
-        except Exception:
-            log.exception("legacy run_pipeline: ML falló")
-
-    # Digest inmediato: mantiene el comportamiento histórico del botón manual.
     try:
-        send_daily_digest(user_id)
-    except Exception:
-        log.exception("legacy run_pipeline: digest falló")
+        upd(etapa="Cargando fuentes…", estado="running")
+        res = (
+            sb.table("scraping_sources")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("is_active", True)
+            .execute()
+        )
+        sources = res.data or []
+        if not sources:
+            lines.append("No hay fuentes activas.")
+            upd(
+                estado="success",
+                fecha_fin=datetime.now(timezone.utc).isoformat(),
+                total_encontradas=0,
+                nuevas=0,
+                enviadas_a_telegram=0,
+                log_resumen="\n".join(lines),
+                etapa="Listo",
+            )
+            return
+
+        total_new = 0
+        total_seen = 0
+        remaining = settings.scrape_max_properties
+        source_failures = 0
+
+        headers = {"User-Agent": settings.user_agent}
+        with httpx.Client(headers=headers, follow_redirects=True) as client:
+            for src in sources:
+                if remaining <= 0:
+                    break
+                platform = (src.get("platform") or "finca_raiz").strip()
+                try:
+                    lines.append(f"Fuente «{src.get('name')}» ({platform})")
+                    upd(etapa=f"Scrapeando listado ({src.get('name')})…")
+                    if platform == "mercado_libre":
+                        rows = list(_scrape_one_ml(src, remaining, settings.scrape_delay_seconds, client))
+                    else:
+                        rows = list(_scrape_one_fr(src, remaining, settings.scrape_delay_seconds, client))
+                    total_seen += len(rows)
+                    upd(etapa="Extrayendo detalles / guardando…")
+                    for row in rows:
+                        ext = row["external_id"]
+                        plat = row.get("platform") or platform
+                        ex = (
+                            sb.table("properties")
+                            .select("id")
+                            .eq("user_id", user_id)
+                            .eq("platform", plat)
+                            .eq("external_id", ext)
+                            .limit(1)
+                            .execute()
+                        )
+                        is_new = len(ex.data or []) == 0
+                        payload = _merge_row(user_id, row)
+                        sb.table("properties").upsert(
+                            payload,
+                            on_conflict="platform,external_id,user_id",
+                        ).execute()
+                        if is_new:
+                            total_new += 1
+                    remaining = max(0, remaining - len(rows))
+                    sb.table("scraping_sources").update(
+                        {
+                            "last_run_at": datetime.now(timezone.utc).isoformat(),
+                            "last_run_properties_count": len(rows),
+                            "last_run_error": None,
+                        }
+                    ).eq("id", src["id"]).execute()
+                except Exception as src_err:
+                    log.exception("fuente %s (%s) falló", src.get("name"), platform)
+                    err_msg = str(src_err)
+                    source_failures += 1
+                    lines.append(
+                        f"Fuente «{src.get('name')}» ({platform}) falló: {err_msg}"
+                    )
+                    sb.table("scraping_sources").update(
+                        {
+                            "last_run_at": datetime.now(timezone.utc).isoformat(),
+                            "last_run_error": err_msg,
+                        }
+                    ).eq("id", src["id"]).execute()
+                    continue
+
+        # Digest inmediato: el botón manual históricamente envía Telegram al
+        # final. Idempotente vía notificada_at.
+        digest_result = {"sent": 0}
+        try:
+            digest_result = send_daily_digest(user_id) or digest_result
+        except Exception:
+            log.exception("legacy run_pipeline: digest falló")
+
+        all_failed = source_failures > 0 and source_failures == len(sources)
+        partial_fail_msg = (
+            f"{source_failures} de {len(sources)} fuentes fallaron"
+            if source_failures and not all_failed
+            else None
+        )
+        upd(
+            estado="failed" if all_failed else "success",
+            fecha_fin=datetime.now(timezone.utc).isoformat(),
+            total_encontradas=total_seen,
+            nuevas=total_new,
+            enviadas_a_telegram=int(digest_result.get("sent", 0)),
+            log_resumen="\n".join(lines[-40:]),
+            etapa="Listo" if not all_failed else "Error",
+            mensaje_error=(
+                "Todas las fuentes fallaron" if all_failed else partial_fail_msg
+            ),
+        )
+    except Exception as e:
+        log.exception("legacy run_pipeline failed")
+        upd(
+            estado="failed",
+            fecha_fin=datetime.now(timezone.utc).isoformat(),
+            mensaje_error=str(e),
+            log_resumen="\n".join(lines + [str(e)]),
+            etapa="Error",
+        )
