@@ -72,7 +72,20 @@ def fetch_html_after_challenge(
         r1 = client.get(url)
         last_status = r1.status_code
         last_len = len(r1.text)
-        if last_len > 50_000 and "ui-search" in r1.text:
+        # Señales de "página real" que ML cambia con frecuencia:
+        # - listado: aparece "ui-search" (class legacy) o "andes-pagination" (Andes DS)
+        #   o URLs tipo "mercadolibre.com.co/MCO-\d+" (items en el HTML).
+        # - detalle: "ui-pdp" (class legacy) o "andes-money-amount" (precio Andes).
+        if last_len > 50_000 and any(
+            marker in r1.text
+            for marker in (
+                "ui-search",
+                "andes-pagination",
+                "ui-pdp",
+                "andes-money-amount",
+                "mercadolibre.com.co/MCO-",
+            )
+        ):
             return r1.text
         bm = get_bmstate_value(client)
         if bm:
