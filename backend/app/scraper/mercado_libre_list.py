@@ -12,8 +12,9 @@ import random
 import re
 from typing import Any
 
-import httpx
+import httpx  # noqa: F401  # se mantiene por compat de tipos en otros módulos
 from bs4 import BeautifulSoup
+from curl_cffi import requests as cffi_requests
 
 from .mercado_libre_challenge import ML_BROWSER_HEADERS, fetch_html_after_challenge
 
@@ -101,7 +102,7 @@ def extract_listing_items(html: str, limit: int | None = None) -> list[dict[str,
 
 
 def gather_listing_item_urls(
-    client: httpx.Client,
+    client: Any,
     base_list_url: str,
     max_items: int,
     *,
@@ -136,38 +137,45 @@ def gather_listing_item_urls(
     return ordered[:max_items]
 
 
-def ml_client_with_optional_cookie(ml_cookie: str | None) -> httpx.Client:
-    """Cliente httpx con UA rotado + proxy residencial opcional.
+def ml_client_with_optional_cookie(ml_cookie: str | None) -> Any:
+    """Cliente ``curl_cffi`` con TLS fingerprint de Chrome + proxy residencial opcional.
+
+    Akamai Bot Manager (ML) detecta la huella TLS (JA3/JA4) de ``httpx``/``requests``
+    como "bot python" aunque el PoW pase. ``curl_cffi`` usa libcurl con BoringSSL e
+    ``impersonate="chrome124"``, replicando el handshake real de Chrome. Esto suele
+    ser el fix decisivo contra el soft-block que deja páginas sin ítems ``MCO-\\d+-``.
 
     Si ``ML_PROXY_URL`` está definido en el entorno (formato
-    ``http://user:pass@host:port``), se enruta todo el tráfico ML por ese proxy.
-    Recomendado: proxies residenciales (Decodo / IPRoyal / Bright Data) porque
-    las IPs de datacenter (Railway) están en listas negras de Akamai Bot Manager.
+    ``http://user:pass@host:port``), se enruta todo el tráfico ML por ese proxy
+    residencial (Decodo / IPRoyal / Bright Data).
     """
     from ..config import get_settings
 
     settings = get_settings()
     headers = dict(ML_BROWSER_HEADERS)
-    # Rotamos UA: si el user_agent configurado es el default genérico "FlipperMVP",
-    # elegimos uno del pool; si el usuario puso uno custom se respeta.
     headers["User-Agent"] = _pick_user_agent(settings.user_agent)
 
-    client_kwargs: dict[str, Any] = {
-        "headers": headers,
-        "follow_redirects": True,
+    session_kwargs: dict[str, Any] = {
+        "impersonate": "chrome124",
         "timeout": 60.0,
     }
     if settings.ml_proxy_url:
-        # httpx>=0.28: el parámetro es `proxy` (string único). httpx<0.28 usaba `proxies`.
-        client_kwargs["proxy"] = settings.ml_proxy_url
+        # curl_cffi acepta `proxies={"http": ..., "https": ...}` o `proxy=<url>`.
+        session_kwargs["proxies"] = {
+            "http": settings.ml_proxy_url,
+            "https": settings.ml_proxy_url,
+        }
 
-    c = httpx.Client(**client_kwargs)
+    session = cffi_requests.Session(**session_kwargs)
+    # impersonate ya setea headers base de Chrome; sobreescribimos los nuestros
+    # para mantener Accept-Language es-CO y UA rotado.
+    session.headers.update(headers)
     if ml_cookie and ml_cookie.strip():
-        c.headers["Cookie"] = ml_cookie.strip()
-    return c
+        session.headers["Cookie"] = ml_cookie.strip()
+    return session
 
 
-def fetch_listing_html(client: httpx.Client, list_url: str) -> str:
+def fetch_listing_html(client: Any, list_url: str) -> str:
     """Una sola página: PoW o ML_COOKIE ya aplicada en client."""
     return fetch_html_after_challenge(client, list_url)
 

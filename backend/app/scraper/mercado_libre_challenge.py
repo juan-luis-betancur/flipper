@@ -6,8 +6,9 @@ import logging
 import re
 import time
 import urllib.parse
+from typing import Any
 
-import httpx
+import httpx  # noqa: F401  # retrocompat: tipos existentes en otros módulos
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +42,11 @@ ML_BROWSER_HEADERS = {
 }
 
 
-def get_bmstate_value(client: httpx.Client) -> str | None:
-    for cookie in client.cookies.jar:
+def get_bmstate_value(client: Any) -> str | None:
+    # curl_cffi/requests exponen `client.cookies` como RequestsCookieJar iterable
+    # de objetos Cookie con .name/.value/.domain. httpx usa `client.cookies.jar`.
+    jar = getattr(client.cookies, "jar", client.cookies)
+    for cookie in jar:
         if cookie.name == "_bmstate" and "mercadolibre" in (cookie.domain or ""):
             return cookie.value
     return None
@@ -61,13 +65,13 @@ def solve_bmstate_pow(token: str, difficulty_raw: str) -> int:
     raise RuntimeError("PoW Mercado Libre: no se encontró solución en rango razonable")
 
 
-def apply_bmc_cookie(client: httpx.Client, token: str, a: int) -> None:
+def apply_bmc_cookie(client: Any, token: str, a: int) -> None:
     val = urllib.parse.quote(f"{token};{a}")
     client.cookies.set("_bmc", val, domain=".mercadolibre.com.co", path="/")
 
 
 def fetch_html_after_challenge(
-    client: httpx.Client,
+    client: Any,
     url: str,
     *,
     max_attempts: int = 4,
