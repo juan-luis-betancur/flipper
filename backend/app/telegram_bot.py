@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from html import escape
 from typing import Any
 
@@ -8,26 +7,26 @@ import httpx
 
 TG_API = "https://api.telegram.org"
 
-# Comando "guardar" con signos/espacios alrededor (evita fallar en "guardar!" o "… guardar …").
-_GUARDAR_CMD_RE = re.compile(r"^[\s\"'()¡¿….,;:!?\-]*guardar[\s\"'()¡¿….,;:!?\-]*$", re.I)
+# Separador entre bloques de apartamento. También es el punto de corte que usa
+# ``split_telegram_html`` para no partir un apto a la mitad.
+BLOCK_SEP = "--------------------"
 
-TELEGRAM_HINT_REPLY_TO_LISTING = (
-    "Para guardar: responde con la palabra <b>guardar</b> "
-    "<u>citando el mensaje del apartamento</u> (usa «Responder» en ese mensaje)."
+_HEADER_SEP = "--------------------------"
+
+_PLATFORM_LABELS = {
+    "mercado_libre": "Mercado Libre",
+    "finca_raiz": "Finca Raíz",
+}
+
+# Orden fijo en el desglose para que el mensaje se vea igual cada día.
+_PLATFORM_ORDER = ("mercado_libre", "finca_raiz")
+
+# Mensaje de fallo: sin detalle técnico, a propósito.
+FALLO_ESCANEO_HTML = (
+    "⚠️ <b>No pude completar el escaneo</b>\n"
+    "Ocurrió algo al consultar los portales y no logré revisar las publicaciones. "
+    "Lo intento de nuevo en la próxima corrida."
 )
-
-TELEGRAM_HINT_PROPERTY_NOT_FOUND = (
-    "No encontré esa propiedad en tu cuenta Flipper. "
-    "Asegúrate de citar el aviso que envió este bot."
-)
-
-
-def is_guardar_command(text: str) -> bool:
-    """True si el mensaje es solo la orden guardar (tolerante a puntuación/espacios)."""
-    t = (text or "").strip()
-    if not t:
-        return False
-    return bool(_GUARDAR_CMD_RE.fullmatch(t))
 
 
 def send_message(
@@ -64,36 +63,14 @@ def format_cop_colombian(n: float | int | None) -> str | None:
     return f"${s}"
 
 
-def format_scan_summary_html(encontradas: int, cumplen: int) -> str:
-    sep = "---------------------"
-    return (
-        f"📊 <b>Resumen del Escaneo</b>\n"
-        f"{sep}\n"
-        f"🔍 Encontradas: <b>{encontradas}</b>\n"
-        f"✅ Cumplen reglas: <b>{cumplen}</b>\n"
-        f"{sep}\n"
-        f"👇 <b>Estas son las que cumplen:</b> 👇"
-    )
-
-
-def format_property_message(row: dict[str, Any], *, index: int | None = None) -> str:
-    ext = row.get("external_id")
-    title = str(row.get("title") or "Propiedad").strip()
+def format_property_block(row: dict[str, Any], *, index: int) -> str:
+    """Bloque compacto de un apartamento dentro del mensaje único."""
     url = str(row.get("url") or "").strip()
     price = row.get("price")
     m2 = row.get("precio_por_m2")
     area = row.get("area")
 
-    if index is not None:
-        head = f"🏢 <b>Apto #{index}</b>"
-        sub = f"<i>{escape(title[:200])}</i>" if title else ""
-    else:
-        head = f"🏢 <b>{escape(title[:200])}</b>"
-        sub = ""
-
-    lines: list[str] = [head]
-    if sub:
-        lines.append(sub)
+    lines: list[str] = [f"🏢 <b>Apto #{index}</b>"]
 
     pc = format_cop_colombian(price)
     if pc:
@@ -111,34 +88,79 @@ def format_property_message(row: dict[str, Any], *, index: int | None = None) ->
         lines.append(f"📊 <b>Precio/m²:</b> {pm}")
 
     if url:
-        lines.append(f'🔗 <a href="{escape(url, quote=True)}">Ver publicación</a>')
-    lines.append("")
-    plat = str(row.get("platform") or "finca_raiz").strip() or "finca_raiz"
-    lines.append(f"<code>ID: {escape(plat)}:{escape(str(ext))}</code>")
-    lines.append("")
-    lines.append("Responde <b>GUARDAR</b> a este mensaje para guardarla en Flipper.")
+        lines.append(f'🔗 <a href="{escape(url, quote=True)}">Ver Publicación</a>')
+
     return "\n".join(lines)
 
 
-_LISTING_REF_RE = re.compile(r"ID:\s*([a-z_]+)\s*:\s*([^\s<]+)", re.I)
-_ALLOWED_PLATFORMS = frozenset({"finca_raiz", "mercado_libre"})
+def _platform_label(platform: str) -> str:
+    return _PLATFORM_LABELS.get(platform, platform.replace("_", " ").title())
 
 
-def parse_reply_listing_ref(reply_text: str) -> tuple[str, str] | None:
-    """Devuelve (platform, external_id) si el mensaje citado incluye la línea ID: plataforma:ext."""
-    if not reply_text:
-        return None
-    m = _LISTING_REF_RE.search(reply_text)
-    if not m:
-        return None
-    plat = m.group(1).strip().lower()
-    ext = m.group(2).strip()
-    if plat not in _ALLOWED_PLATFORMS or not ext:
-        return None
-    return (plat, ext)
+def format_digest_html(
+    *,
+    por_plataforma: dict[str, int],
+    total_encontradas: int,
+    matches: list[dict[str, Any]],
+) -> str:
+    """Arma el resumen completo del escaneo en un solo mensaje.
+
+    ``por_plataforma`` es el conteo de publicaciones vistas por portal
+    (p. ej. ``{"mercado_libre": 9, "finca_raiz": 5}``); ``total_encontradas`` es
+    el total escaneado y ``matches`` las que pasaron los filtros.
+    """
+    lines: list[str] = [
+        "📊 <b>Resumen del Escaneo</b>",
+        _HEADER_SEP,
+        f"🔍 <b>Encontradas:</b> {total_encontradas}",
+    ]
+
+    # Primero las plataformas conocidas en orden fijo, después cualquier otra.
+    conocidas = [p for p in _PLATFORM_ORDER if por_plataforma.get(p)]
+    otras = sorted(p for p, n in por_plataforma.items() if n and p not in _PLATFORM_ORDER)
+    for plat in conocidas + otras:
+        lines.append(f"   • {_platform_label(plat)}: {por_plataforma[plat]}")
+
+    lines.append(f"✅ <b>Cumplen reglas:</b> {len(matches)}")
+    lines.append(_HEADER_SEP)
+    lines.append("")
+
+    if not total_encontradas:
+        lines.append("😴 Hoy no encontré publicaciones nuevas en los portales.")
+        return "\n".join(lines)
+
+    if not matches:
+        lines.append("😴 Ninguna de las encontradas cumple tus filtros hoy.")
+        return "\n".join(lines)
+
+    lines.append("👇 <b>Estas son las que cumplen:</b> 👇")
+    lines.append("")
+
+    bloques = [format_property_block(p, index=i) for i, p in enumerate(matches, start=1)]
+    lines.append(f"\n{BLOCK_SEP}\n".join(bloques))
+
+    return "\n".join(lines)
 
 
-def parse_reply_external_id(reply_text: str) -> str | None:
-    """Solo el external_id (compatibilidad con mensajes que ya incluyen plataforma en la misma línea)."""
-    ref = parse_reply_listing_ref(reply_text)
-    return ref[1] if ref else None
+def split_telegram_html(text: str, limit: int = 3900) -> list[str]:
+    """Parte el mensaje en trozos que quepan en Telegram (tope real: 4096).
+
+    Corta solo en los separadores de bloque para no romper un apto por la mitad.
+    Con pocas coincidencias devuelve una sola parte, que es el caso normal.
+    """
+    if len(text) <= limit:
+        return [text]
+
+    sep = f"\n{BLOCK_SEP}\n"
+    partes: list[str] = []
+    actual = ""
+    for bloque in text.split(sep):
+        candidato = f"{actual}{sep}{bloque}" if actual else bloque
+        if actual and len(candidato) > limit:
+            partes.append(actual)
+            actual = bloque
+        else:
+            actual = candidato
+    if actual:
+        partes.append(actual)
+    return partes
