@@ -38,9 +38,11 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Configura el webhook de Telegram a:
-
-`https://TU_DOMINIO/telegram/webhook/TU_TELEGRAM_WEBHOOK_SECRET`
+El bot solo **envía** el resumen diario; ya no procesa respuestas (el guardado se
+hace desde la web). Si tienes un webhook registrado, apúntalo a
+`https://TU_DOMINIO/telegram/webhook/TU_TELEGRAM_WEBHOOK_SECRET`: el endpoint
+sigue existiendo y responde `ok` para que Telegram no acumule updates
+pendientes. Si no lo registras, no pasa nada.
 
 ## Scraping diario (cron HTTP)
 

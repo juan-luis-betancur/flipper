@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable
 
 import httpx
@@ -10,7 +11,12 @@ import httpx
 from ..config import get_settings
 from ..filters import property_matches_alert
 from ..supabase_client import get_supabase
-from ..telegram_bot import format_property_message, format_scan_summary_html, send_message
+from ..telegram_bot import (
+    FALLO_ESCANEO_HTML,
+    format_digest_html,
+    send_message,
+    split_telegram_html,
+)
 from .finca_raiz import build_list_url, scrape_source
 from .mercado_libre import scrape_mercado_libre
 
@@ -228,12 +234,55 @@ def run_scrape_mercado_libre(user_id: str, run_id: str) -> None:
     )
 
 
-def send_daily_digest(user_id: str) -> dict:
-    """Envía a Telegram las propiedades pendientes de notificar (``notificada_at IS NULL``).
+# Ventana usada por el digest para absorber corrimientos de cron (ML 23:50 + FR 05:30).
+DIGEST_WINDOW_HOURS = 36
 
-    Consolida ML (scrapeado anoche) + FR (scrapeado esta madrugada) en un solo
-    resumen. Idempotente: cada propiedad se marca ``notificada_at = now()`` tras
-    enviarse, así que una segunda llamada en el mismo día no reenvía nada.
+
+def _all_runs_failed(sb, user_id: str, cutoff: datetime) -> bool:
+    """True si hubo corridas en la ventana y **todas** terminaron en error."""
+    runs = (
+        sb.table("scraper_runs")
+        .select("estado")
+        .eq("user_id", user_id)
+        .gte("fecha_inicio", cutoff.isoformat())
+        .execute()
+    )
+    estados = [r.get("estado") for r in (runs.data or [])]
+    return bool(estados) and all(e == "failed" for e in estados)
+
+
+def _scanned_by_platform(sb, user_id: str, cutoff: datetime) -> Counter:
+    """Publicaciones distintas que los scrapers vieron en la ventana, por portal.
+
+    Cada upsert refresca ``fecha_scrapeo`` (ver ``_merge_row``), incluso en
+    publicaciones ya conocidas, así que este conteo refleja lo realmente
+    escaneado y no solo lo nuevo.
+    """
+    scanned = (
+        sb.table("properties")
+        .select("platform")
+        .eq("user_id", user_id)
+        .gte("fecha_scrapeo", cutoff.isoformat())
+        .execute()
+    )
+    return Counter(
+        (p.get("platform") or "finca_raiz") for p in (scanned.data or [])
+    )
+
+
+def send_daily_digest(user_id: str, *, scan_failed: bool = False) -> dict:
+    """Envía a Telegram un único resumen del escaneo.
+
+    Reporta cuántas publicaciones se escanearon (desglosadas por portal) y
+    cuáles pasaron los filtros. Siempre envía mensaje —incluso con 0
+    coincidencias— y avisa de forma amable si el escaneo falló por completo.
+
+    ``scan_failed`` lo usa quien llama justo después de scrapear (``run_pipeline``),
+    porque en ese momento la corrida todavía figura como ``running`` en BD y
+    ``_all_runs_failed`` no puede detectarlo.
+
+    Idempotente: cada propiedad pendiente se marca ``notificada_at = now()``
+    tras el envío, así que una segunda llamada no vuelve a listar lo mismo.
     """
     sb = get_supabase()
 
@@ -253,10 +302,20 @@ def send_daily_digest(user_id: str) -> dict:
         log.info("digest: user_id=%s sin filtro/telegram configurado, skip", user_id)
         return {"sent": 0, "reason": "not_configured"}
 
-    # Ventana de 36h para absorber corrimientos de cron (ML 23:50 + FR 05:30).
-    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=DIGEST_WINDOW_HOURS)
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=36)
+    # Si nada pudo escanearse, avisamos sin detalle técnico y no marcamos nada:
+    # las pendientes siguen pendientes para la próxima corrida.
+    if scan_failed or _all_runs_failed(sb, user_id, cutoff):
+        log.warning("digest: user_id=%s todas las corridas fallaron", user_id)
+        try:
+            send_message(tg["bot_token"], str(tg["chat_id"]), FALLO_ESCANEO_HTML)
+        except Exception as e:
+            log.warning("digest aviso de fallo no se pudo enviar user_id=%s: %s", user_id, e)
+        return {"sent": 0, "reason": "all_failed"}
+
+    por_plataforma = _scanned_by_platform(sb, user_id, cutoff)
+
     pending = (
         sb.table("properties")
         .select("*")
@@ -267,33 +326,20 @@ def send_daily_digest(user_id: str) -> dict:
     )
     fresh = pending.data or []
     matches = [p for p in fresh if property_matches_alert(p, filt)]
-    total_seen = len(fresh)
 
-    if not fresh:
-        log.info("digest: user_id=%s sin propiedades pendientes", user_id)
-        return {"sent": 0, "reason": "no_pending"}
+    texto = format_digest_html(
+        por_plataforma=dict(por_plataforma),
+        total_encontradas=sum(por_plataforma.values()),
+        matches=matches,
+    )
 
     sent = 0
-    if matches:
+    for parte in split_telegram_html(texto):
         try:
-            send_message(
-                tg["bot_token"],
-                str(tg["chat_id"]),
-                format_scan_summary_html(total_seen, len(matches)),
-            )
+            send_message(tg["bot_token"], str(tg["chat_id"]), parte)
+            sent += 1
         except Exception as e:
-            log.warning("digest resumen falló user_id=%s: %s", user_id, e)
-        for i, p in enumerate(matches, start=1):
-            try:
-                send_message(
-                    tg["bot_token"],
-                    str(tg["chat_id"]),
-                    format_property_message(p, index=i),
-                    disable_web_page_preview=False,
-                )
-                sent += 1
-            except Exception as e:
-                log.warning("digest item falló user_id=%s id=%s: %s", user_id, p.get("id"), e)
+            log.warning("digest: envío falló user_id=%s: %s", user_id, e)
 
     # Marcar TODAS las pendientes (incluso las que no matchean) para no reprocesarlas.
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -412,26 +458,29 @@ def run_pipeline(user_id: str, run_id: str) -> None:
                     ).eq("id", src["id"]).execute()
                     continue
 
-        # Digest inmediato: el botón manual históricamente envía Telegram al
-        # final. Idempotente vía notificada_at.
-        digest_result = {"sent": 0}
-        try:
-            digest_result = send_daily_digest(user_id) or digest_result
-        except Exception:
-            log.exception("legacy run_pipeline: digest falló")
-
         all_failed = source_failures > 0 and source_failures == len(sources)
         partial_fail_msg = (
             f"{source_failures} de {len(sources)} fuentes fallaron"
             if source_failures and not all_failed
             else None
         )
+
+        # Digest inmediato: el botón manual históricamente envía Telegram al
+        # final. Idempotente vía notificada_at. Le pasamos ``all_failed`` porque
+        # este run todavía figura como "running" en BD y el digest no puede verlo.
+        digest_result = {"sent": 0, "matches": 0}
+        try:
+            digest_result = send_daily_digest(user_id, scan_failed=all_failed) or digest_result
+        except Exception:
+            log.exception("legacy run_pipeline: digest falló")
         upd(
             estado="failed" if all_failed else "success",
             fecha_fin=datetime.now(timezone.utc).isoformat(),
             total_encontradas=total_seen,
             nuevas=total_new,
-            enviadas_a_telegram=int(digest_result.get("sent", 0)),
+            # El digest va en un solo mensaje; lo que le interesa al frontend es
+            # cuántas propiedades se reportaron, no cuántos mensajes se enviaron.
+            enviadas_a_telegram=int(digest_result.get("matches", 0)),
             log_resumen="\n".join(lines[-40:]),
             etapa="Listo" if not all_failed else "Error",
             mensaje_error=(
