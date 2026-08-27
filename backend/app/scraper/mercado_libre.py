@@ -58,9 +58,19 @@ def _listado_con_reintentos(
         if intento < _MAX_SESSION_ATTEMPTS:
             time.sleep(_SESSION_RETRY_DELAY + random.uniform(0, 2.0))
 
+    # El detalle técnico va al log; el mensaje del error lo lee el usuario en
+    # Configuración y ahí solo estorba.
+    log.warning(
+        "ML: %s sesiones bloqueadas. Último motivo: %s",
+        _MAX_SESSION_ATTEMPTS, ultimo_motivo,
+    )
+    # Mensaje pensado para leerse en Configuración: esto es una limitación
+    # conocida de ML, no algo roto que haya que ir a arreglar. Se espera que
+    # ocurra la mayoría de las noches; el recordatorio de las 18:00 lo cubre.
     raise MercadoLibreWall(
-        f"Mercado Libre bloqueó las {_MAX_SESSION_ATTEMPTS} sesiones intentadas "
-        f"(muro anti-bot en todas). Último motivo: {ultimo_motivo}"
+        f"Mercado Libre bloqueó el escaneo automático (muro anti-bot en las "
+        f"{_MAX_SESSION_ATTEMPTS} IPs intentadas). Es esperable: revísalo a mano "
+        f"con el recordatorio de las 6 PM. Finca Raíz no se ve afectada."
     )
 
 
