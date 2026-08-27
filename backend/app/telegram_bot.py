@@ -142,6 +142,35 @@ def format_digest_html(
     return "\n".join(lines)
 
 
+def format_ml_reminder_html(urls: list[str]) -> str:
+    """Recordatorio diario para revisar Mercado Libre a mano.
+
+    El scraper de ML está bloqueado por su sistema anti-bot (ver
+    ``scraper/mercado_libre.py``), así que esta revisión es manual hasta que se
+    resuelva. Finca Raíz sigue llegando automático en el digest de la mañana.
+    """
+    lines = [
+        "🔔 <b>Revisar Mercado Libre</b>",
+        _HEADER_SEP,
+        "Mercado Libre bloquea el escaneo automático, así que esta la revisas a mano.",
+        "",
+    ]
+
+    if not urls:
+        lines.append("⚠️ No tienes ninguna fuente de Mercado Libre activa en Flipper.")
+        return "\n".join(lines)
+
+    if len(urls) == 1:
+        lines.append(f'🔗 <a href="{escape(urls[0], quote=True)}">Abrir búsqueda en Mercado Libre</a>')
+    else:
+        for i, u in enumerate(urls, start=1):
+            lines.append(f'🔗 <a href="{escape(u, quote=True)}">Búsqueda #{i}</a>')
+
+    lines.append("")
+    lines.append("Las que te sirvan, guárdalas en Flipper.")
+    return "\n".join(lines)
+
+
 def split_telegram_html(text: str, limit: int = 3900) -> list[str]:
     """Parte el mensaje en trozos que quepan en Telegram (tope real: 4096).
 

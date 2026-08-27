@@ -14,6 +14,7 @@ from ..supabase_client import get_supabase
 from ..telegram_bot import (
     FALLO_ESCANEO_HTML,
     format_digest_html,
+    format_ml_reminder_html,
     send_message,
     split_telegram_html,
 )
@@ -349,6 +350,63 @@ def send_daily_digest(user_id: str, *, scan_failed: bool = False) -> dict:
         sb.table("properties").update({"notificada_at": now_iso}).in_("id", ids).execute()
 
     return {"sent": sent, "matches": len(matches), "pending_marked": len(ids)}
+
+
+def send_ml_reminder(user_id: str) -> dict:
+    """Recordatorio diario para revisar Mercado Libre manualmente.
+
+    ML bloquea el escaneo automático con su muro anti-bot, así que en vez de
+    reportar 0 cada día mandamos el link para que la revisión se haga a mano.
+    """
+    sb = get_supabase()
+
+    tg_res = (
+        sb.table("telegram_settings").select("*").eq("user_id", user_id).limit(1).execute()
+    )
+    tg = (tg_res.data or [None])[0]
+    if not (tg and tg.get("bot_token") and tg.get("chat_id")):
+        log.info("recordatorio ML: user_id=%s sin telegram configurado, skip", user_id)
+        return {"sent": 0, "reason": "not_configured"}
+
+    # Si el usuario apagó los envíos por Telegram, tampoco le mandamos esto.
+    filt_res = (
+        sb.table("alert_filters")
+        .select("send_telegram")
+        .eq("user_id", user_id)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+    filt = (filt_res.data or [None])[0]
+    if filt and not filt.get("send_telegram"):
+        log.info("recordatorio ML: user_id=%s tiene Telegram desactivado, skip", user_id)
+        return {"sent": 0, "reason": "telegram_off"}
+
+    src_res = (
+        sb.table("scraping_sources")
+        .select("list_url")
+        .eq("user_id", user_id)
+        .eq("platform", "mercado_libre")
+        .eq("is_active", True)
+        .execute()
+    )
+    urls = [
+        (s.get("list_url") or "").strip()
+        for s in (src_res.data or [])
+        if (s.get("list_url") or "").strip()
+    ]
+
+    try:
+        send_message(
+            tg["bot_token"],
+            str(tg["chat_id"]),
+            format_ml_reminder_html(urls),
+        )
+    except Exception as e:
+        log.warning("recordatorio ML falló user_id=%s: %s", user_id, e)
+        return {"sent": 0, "reason": "send_failed"}
+
+    return {"sent": 1, "urls": len(urls)}
 
 
 # ---------------------------------------------------------------------------
