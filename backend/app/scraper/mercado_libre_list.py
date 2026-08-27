@@ -8,7 +8,7 @@ Smoke / producción (p. ej. Railway):
 """
 from __future__ import annotations
 
-import random
+import logging
 import re
 from typing import Any
 
@@ -16,22 +16,18 @@ import httpx  # noqa: F401  # se mantiene por compat de tipos en otros módulos
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
 
-from .mercado_libre_challenge import ML_BROWSER_HEADERS, fetch_html_after_challenge
+from .mercado_libre_challenge import (
+    ML_BROWSER_HEADERS,
+    MercadoLibreWall,
+    fetch_html_after_challenge,
+)
 
-# Pool de User-Agents de Chrome recientes. Reduce fingerprinting trivial.
-_CHROME_UA_POOL = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-]
+log = logging.getLogger(__name__)
 
-
-def _pick_user_agent(default_ua: str | None = None) -> str:
-    ua = (default_ua or "").strip()
-    if ua and "FlipperMVP" not in ua:
-        return ua
-    return random.choice(_CHROME_UA_POOL)
+# Nota: NO rotamos User-Agent. ``impersonate="chrome124"`` fija la huella TLS a
+# un Chrome concreto; anunciar otra versión (o Mac/Linux mientras Sec-Ch-Ua-Platform
+# dice Windows) es una incoherencia que Akamai usa para marcar el cliente como bot.
+# El UA coherente vive en ML_BROWSER_HEADERS.
 
 # Tamaño de página típico en JSON de paginación ML (49 -> 97 = +48).
 _ML_PAGE_STEP = 48
@@ -118,8 +114,16 @@ def gather_listing_item_urls(
         if len(ordered) >= max_items:
             break
         url = listing_url_for_page(base_list_url, page)
-        html = fetch_html_after_challenge(client, url)
-        if len(html) < 10_000 and "verifyChallenge" in html:
+        try:
+            html = fetch_html_after_challenge(client, url)
+        except MercadoLibreWall:
+            # En la primera página el muro invalida la sesión entera: que suba
+            # para reintentar con otra IP. En páginas siguientes ya tenemos
+            # resultados, así que cerramos con lo recolectado.
+            if page == 0:
+                raise
+            log.info("ML paginación cortada por muro en página %s; %s ítems recolectados",
+                     page, len(ordered))
             break
         batch = extract_listing_items(html, limit=None)
         added = False
@@ -153,7 +157,6 @@ def ml_client_with_optional_cookie(ml_cookie: str | None) -> Any:
 
     settings = get_settings()
     headers = dict(ML_BROWSER_HEADERS)
-    headers["User-Agent"] = _pick_user_agent(settings.user_agent)
 
     session_kwargs: dict[str, Any] = {
         "impersonate": "chrome124",
@@ -165,6 +168,15 @@ def ml_client_with_optional_cookie(ml_cookie: str | None) -> Any:
             "http": settings.ml_proxy_url,
             "https": settings.ml_proxy_url,
         }
+    else:
+        # Sin proxy el tráfico sale con IP de datacenter, que ML bloquea casi
+        # siempre. Avisamos fuerte: un typo en el nombre de la variable de entorno
+        # deja el scraper "funcionando" pero devolviendo 0 durante semanas.
+        log.warning(
+            "ML sin proxy: ML_PROXY_URL no está configurada. Se usará la IP del "
+            "servidor (datacenter), que Mercado Libre suele bloquear. Formato "
+            "esperado: http://usuario:clave@host:puerto"
+        )
 
     session = cffi_requests.Session(**session_kwargs)
     # impersonate ya setea headers base de Chrome; sobreescribimos los nuestros

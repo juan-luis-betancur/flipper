@@ -18,10 +18,37 @@ _MCO_ITEM_IN_HTML_RE = re.compile(
     r"https://[a-z0-9.-]+\.mercadolibre\.com\.co/MCO-\d+-", re.I
 )
 
+# Muros anti-bot de ML. Vienen con status 200 y ~25-60KB, así que no los delata
+# ni el status ni el tamaño: hay que reconocerlos por el bundle de frontend que
+# sirven. ``abuse-captcha`` es el CAPTCHA; ``suspicious-traffic`` pide login.
+_WALL_MARKERS = ("abuse-captcha", "suspicious-traffic", "verifychallenge")
+
+
+class MercadoLibreWall(RuntimeError):
+    """ML respondió con un muro anti-bot en lugar de la página pedida.
+
+    Es transitorio y depende de la IP: reintentar con una sesión nueva (que el
+    proxy residencial resuelve a otra IP) suele pasar en pocos intentos.
+    """
+
+
+def looks_like_wall(html: str) -> bool:
+    """True si ML devolvió un muro anti-bot en vez de la página pedida."""
+    if not html:
+        return True
+    low = html.lower()
+    return any(m in low for m in _WALL_MARKERS)
+
+
+# La versión de Chrome debe coincidir con el ``impersonate`` de curl_cffi
+# (ver ml_client_with_optional_cookie). Un Chrome real nunca se contradice entre
+# huella TLS, User-Agent y Sec-Ch-Ua; esa incoherencia es señal de bot.
+CHROME_MAJOR = "124"
+
 ML_BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        f"(KHTML, like Gecko) Chrome/{CHROME_MAJOR}.0.0.0 Safari/537.36"
     ),
     "Accept": (
         "text/html,application/xhtml+xml,application/xml;q=0.9,"
@@ -30,7 +57,10 @@ ML_BROWSER_HEADERS = {
     "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
     "Accept-Encoding": "gzip, deflate, br",
     "Cache-Control": "max-age=0",
-    "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    "Sec-Ch-Ua": (
+        f'"Chromium";v="{CHROME_MAJOR}", "Google Chrome";v="{CHROME_MAJOR}", '
+        '"Not-A.Brand";v="99"'
+    ),
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
     "Sec-Fetch-Dest": "document",
@@ -112,10 +142,9 @@ def fetch_html_after_challenge(
             time.sleep(retry_delay * attempt)
 
     if not bm:
-        raise RuntimeError(
+        raise MercadoLibreWall(
             f"Mercado Libre: no hay cookie _bmstate tras {max_attempts} intentos "
-            f"(último status={last_status}, html_len={last_len}). "
-            "Configura ML_COOKIE (header Cookie del navegador) o reintenta más tarde."
+            f"(último status={last_status}, html_len={last_len})."
         )
 
     raw = urllib.parse.unquote(bm)
@@ -126,9 +155,18 @@ def fetch_html_after_challenge(
     a = solve_bmstate_pow(token, diff)
     apply_bmc_cookie(client, token, a)
     r2 = client.get(url)
+    body2 = r2.text
     log.info(
         "ML fetch post-PoW url=%s status=%s len=%s has_mco=%s",
-        url, r2.status_code, len(r2.text),
-        bool(_MCO_ITEM_IN_HTML_RE.search(r2.text)),
+        url, r2.status_code, len(body2),
+        bool(_MCO_ITEM_IN_HTML_RE.search(body2)),
     )
-    return r2.text
+    # Resolver el PoW no garantiza pasar: ML puede responder con el muro de
+    # CAPTCHA igualmente. Devolverlo como si fuera bueno es lo que hacía que el
+    # scraper reportara 0 propiedades en silencio.
+    if looks_like_wall(body2):
+        raise MercadoLibreWall(
+            f"Mercado Libre respondió con muro anti-bot tras resolver el PoW "
+            f"(status={r2.status_code}, len={len(body2)})."
+        )
+    return body2
