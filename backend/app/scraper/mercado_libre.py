@@ -7,60 +7,90 @@ import random
 import time
 from typing import Any
 
+from .mercado_libre_challenge import MercadoLibreWall
 from .mercado_libre_detail import fetch_detail_row
 from .mercado_libre_list import gather_listing_item_urls, ml_client_with_optional_cookie
 
 log = logging.getLogger(__name__)
 
-# Señales de bloqueo por IP/Akamai. Si aparecen en las primeras páginas, tiramos un
-# error explícito en lugar de devolver 0 propiedades silenciosamente.
-_BLOCK_SIGNALS = (
-    "Access Denied",
-    "Acceso denegado",
-    "Bot Manager",
-    "Request blocked",
-    "unusual traffic",
-)
+# Cuántas sesiones nuevas probar antes de rendirse. Cada sesión sale por una IP
+# residencial distinta del proxy. La tasa de éxito medida contra ML en agosto de
+# 2026 rondó el 3-5% por intento, así que hacen falta bastantes: con 25 intentos
+# la probabilidad acumulada queda en ~70%. Ajustable sin desplegar vía
+# ML_MAX_SESSION_ATTEMPTS por si ML endurece o afloja.
+_MAX_SESSION_ATTEMPTS = int(os.getenv("ML_MAX_SESSION_ATTEMPTS", "25"))
+
+# Espera entre intentos. Corta a propósito: el cuello de botella es encontrar una
+# IP limpia, no la paciencia de ML con una IP ya marcada.
+_SESSION_RETRY_DELAY = float(os.getenv("ML_SESSION_RETRY_DELAY", "4.0"))
 
 
-def _looks_blocked(html: str) -> bool:
-    if not html:
-        return True
-    if len(html) < 5000:
-        # ML devuelve ~500KB para listados reales; HTML enano = challenge/bloqueo.
-        return True
-    low = html.lower()
-    return any(sig.lower() in low for sig in _BLOCK_SIGNALS)
+def _listado_con_reintentos(
+    list_url: str, max_props: int, ml_cookie: str | None
+) -> tuple[Any, list[dict[str, str]]]:
+    """Consigue el listado probando sesiones nuevas hasta caer en una IP limpia.
+
+    Devuelve ``(client, items)`` con el cliente que logró pasar, para reutilizar
+    sus cookies al pedir los detalles. Lanza ``MercadoLibreWall`` si ninguna
+    sesión pasa: nunca devuelve vacío en silencio.
+    """
+    ultimo_motivo = "sin detalle"
+
+    for intento in range(1, _MAX_SESSION_ATTEMPTS + 1):
+        client = ml_client_with_optional_cookie(ml_cookie)
+        try:
+            items = gather_listing_item_urls(client, list_url, max_props, max_pages=30)
+        except MercadoLibreWall as e:
+            ultimo_motivo = str(e)
+            log.info("ML listado intento %s/%s: muro anti-bot (%s)",
+                     intento, _MAX_SESSION_ATTEMPTS, e)
+            client.close()
+        else:
+            if items:
+                log.info("ML listado ok en intento %s/%s: %s ítems",
+                         intento, _MAX_SESSION_ATTEMPTS, len(items))
+                return client, items
+            # Sin muro y sin ítems: la página cargó pero venía vacía. Puede ser
+            # un listado realmente sin resultados, así que no insistimos.
+            log.info("ML listado intento %s: página válida sin ítems", intento)
+            return client, []
+
+        if intento < _MAX_SESSION_ATTEMPTS:
+            time.sleep(_SESSION_RETRY_DELAY + random.uniform(0, 2.0))
+
+    # El detalle técnico va al log; el mensaje del error lo lee el usuario en
+    # Configuración y ahí solo estorba.
+    log.warning(
+        "ML: %s sesiones bloqueadas. Último motivo: %s",
+        _MAX_SESSION_ATTEMPTS, ultimo_motivo,
+    )
+    # Mensaje pensado para leerse en Configuración: esto es una limitación
+    # conocida de ML, no algo roto que haya que ir a arreglar. Se espera que
+    # ocurra la mayoría de las noches; el recordatorio de las 18:00 lo cubre.
+    raise MercadoLibreWall(
+        f"Mercado Libre bloqueó el escaneo automático (muro anti-bot en las "
+        f"{_MAX_SESSION_ATTEMPTS} IPs intentadas). Es esperable: revísalo a mano "
+        f"con el recordatorio de las 6 PM. Finca Raíz no se ve afectada."
+    )
 
 
 def scrape_mercado_libre(list_url: str, max_props: int, delay: float) -> list[dict[str, Any]]:
     """
-    Usa el mismo httpx.Client para listado y detalles (cookies _bmstate/_bmc).
+    Usa el mismo cliente para listado y detalles (cookies _bmstate/_bmc).
     ML_COOKIE en entorno evita PoW si las cookies siguen válidas.
     ML_PROXY_URL (residencial) se aplica dentro de ml_client_with_optional_cookie.
+
+    ML responde con muro anti-bot a la mayoría de IPs, así que el listado se
+    reintenta con sesiones nuevas (cada una sale por otra IP del proxy) hasta
+    dar con una que pase.
     """
     if not (list_url or "").strip():
         return []
     ml_cookie = os.environ.get("ML_COOKIE")
     results: list[dict[str, Any]] = []
 
-    with ml_client_with_optional_cookie(ml_cookie) as client:
-        items = gather_listing_item_urls(client, list_url.strip(), max_props, max_pages=30)
-        if not items:
-            # Probar una vez más el fetch directo para detectar bloqueo claro.
-            try:
-                probe = client.get(list_url.strip()).text
-            except Exception:  # noqa: BLE001
-                probe = ""
-            if _looks_blocked(probe):
-                raise RuntimeError(
-                    "Mercado Libre: IP bloqueada o challenge no resuelto "
-                    "(HTML vacío/denegado). Configura ML_PROXY_URL con un proxy "
-                    "residencial (Decodo/IPRoyal/Bright Data) o ML_COOKIE con la "
-                    "cookie del navegador."
-                )
-            return []
-
+    client, items = _listado_con_reintentos(list_url.strip(), max_props, ml_cookie)
+    try:
         for it in items:
             if len(results) >= max_props:
                 break
@@ -74,4 +104,7 @@ def scrape_mercado_libre(list_url: str, max_props: int, delay: float) -> list[di
             except Exception:
                 log.debug("ML detalle omitido url=%s", it.get("url"), exc_info=True)
                 continue
+    finally:
+        client.close()
+
     return results

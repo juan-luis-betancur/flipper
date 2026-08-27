@@ -13,6 +13,7 @@ from .scraper.pipeline import (
     run_scrape_finca_raiz,
     run_scrape_mercado_libre,
     send_daily_digest,
+    send_ml_reminder,
 )
 from .supabase_client import get_supabase
 from .telegram_bot import send_message
@@ -137,6 +138,22 @@ def cron_send_digest(
     for uid in user_ids:
         background_tasks.add_task(send_daily_digest, uid)
     return {"users": len(user_ids), "action": "digest"}
+
+
+@app.post("/api/cron/ml-reminder")
+def cron_ml_reminder(
+    background_tasks: BackgroundTasks, x_cron_secret: str | None = Header(None)
+):
+    """Recordatorio para revisar Mercado Libre a mano (18:00 Bogotá = 23:00 UTC).
+
+    ML bloquea el escaneo automático con su muro anti-bot, así que en lugar de
+    reportar 0 cada día se envía el link de la búsqueda para revisarla manualmente.
+    """
+    _require_cron_secret(x_cron_secret)
+    user_ids = _active_user_ids_for_platform("mercado_libre")
+    for uid in user_ids:
+        background_tasks.add_task(send_ml_reminder, uid)
+    return {"users": len(user_ids), "action": "ml_reminder"}
 
 
 @app.post("/api/cron/daily-scrape")

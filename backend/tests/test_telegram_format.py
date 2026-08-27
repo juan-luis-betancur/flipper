@@ -4,6 +4,7 @@ import unittest
 
 from app.telegram_bot import (
     format_digest_html,
+    format_ml_reminder_html,
     format_property_block,
     split_telegram_html,
 )
@@ -101,6 +102,32 @@ class TestFormatDigest(unittest.TestCase):
         s = format_digest_html(por_plataforma={}, total_encontradas=0, matches=[])
         self.assertIn("Encontradas:</b> 0", s)
         self.assertIn("no encontré publicaciones nuevas", s)
+
+
+class TestMlReminder(unittest.TestCase):
+    def test_una_url(self) -> None:
+        url = "https://listado.mercadolibre.com.co/inmuebles/apartamentos/venta/x"
+        s = format_ml_reminder_html([url])
+        self.assertIn("Revisar Mercado Libre", s)
+        self.assertIn(f'href="{url}"', s)
+        self.assertIn("Abrir búsqueda", s)
+
+    def test_varias_urls(self) -> None:
+        s = format_ml_reminder_html(["https://a.com/1", "https://b.com/2"])
+        self.assertIn('href="https://a.com/1"', s)
+        self.assertIn('href="https://b.com/2"', s)
+        self.assertIn("Búsqueda #1", s)
+        self.assertIn("Búsqueda #2", s)
+
+    def test_sin_fuentes(self) -> None:
+        s = format_ml_reminder_html([])
+        self.assertIn("No tienes ninguna fuente de Mercado Libre activa", s)
+        self.assertNotIn("href=", s)
+
+    def test_escapa_comillas_en_url(self) -> None:
+        s = format_ml_reminder_html(['https://x.com/?a="b'])
+        self.assertNotIn('?a="b', s)
+        self.assertIn("&quot;", s)
 
 
 class TestSplitTelegramHtml(unittest.TestCase):
